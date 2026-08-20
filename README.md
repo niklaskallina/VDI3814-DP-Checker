@@ -50,7 +50,46 @@ dienen nur als Rückfallebene.
 
 ## Installation (Windows)
 
-### 1. Python
+### Variante A – fertige EXE (keine Python-Installation nötig)
+
+1. **Herunterladen**
+   * Fertige Version: unter [Releases](../../releases) die Datei
+     `VDI3814-DP-Checker-windows.zip` laden.
+   * Immer aktueller Stand: Reiter **Actions** → letzter Lauf von
+     „Windows-EXE bauen" → Abschnitt *Artifacts* → `VDI3814-DP-Checker-windows`.
+2. **ZIP vollständig entpacken** (nicht aus dem ZIP heraus starten).
+3. **`VDI3814-DP-Checker.exe` starten** – die Oberfläche öffnet sich im Browser
+   unter `http://127.0.0.1:8501`. Das Konsolenfenster bitte geöffnet lassen.
+
+Dieselbe EXE arbeitet mit Argumenten als Kommandozeile:
+
+```bat
+VDI3814-DP-Checker.exe check
+VDI3814-DP-Checker.exe import C:\Projekte\Listen
+VDI3814-DP-Checker.exe export Auswertung.xlsx
+```
+
+Datenbank (`data\`) und Exporte (`out\`) legt das Programm **neben der EXE** an –
+der Ordner ist damit portabel, z. B. auf einem USB-Stick oder Netzlaufwerk.
+
+> Windows-SmartScreen meldet bei nicht signierten Programmen „Computer geschützt".
+> Über *Weitere Informationen → Trotzdem ausführen* startet die Anwendung. Wenn eine
+> Signatur gewünscht ist: Zertifikat als GitHub-Secret hinterlegen, dann kann der
+> Workflow zusätzlich `signtool` aufrufen.
+
+Für gescannte Listen und Fotos wird zusätzlich Ollama benötigt (Schritt 2 unten).
+Excel-Dateien und PDFs mit Textebene funktionieren ohne Ollama.
+
+**Neue Version veröffentlichen:** Tag setzen, der Rest passiert automatisch.
+
+```bat
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Variante B – aus dem Quellcode
+
+#### 1. Python
 
 Python 3.10 oder neuer von [python.org](https://www.python.org/downloads/windows/)
 installieren (bei der Installation **„Add python.exe to PATH“** anhaken).
@@ -62,7 +101,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Ollama + Vision-Modell (für Scans und Bilder)
+#### 2. Ollama + Vision-Modell (für Scans und Bilder)
 
 Nur nötig, wenn gescannte PDFs, Fotos oder PNG/JPEG ausgewertet werden sollen.
 Für Excel-Dateien und Text-PDFs läuft das Tool auch ohne.
@@ -91,7 +130,7 @@ Ollama läuft als lokaler Dienst auf `http://127.0.0.1:11434`. Prüfen:
 python -m vdi3814.cli check
 ```
 
-### 3. Tesseract-OCR (optional)
+#### 3. Tesseract-OCR (optional)
 
 Verbessert die Fassungserkennung bei schlechten Scans.
 [UB-Mannheim-Installer](https://github.com/UB-Mannheim/tesseract/wiki) inkl.
@@ -127,6 +166,7 @@ Browser ist nur die Anzeige, es geht nichts ins Netz.
 
 ```bat
 python -m vdi3814.cli check                          :: Installation prüfen
+python -m vdi3814.cli selbsttest                     :: Oberfläche einmal durchlaufen lassen
 python -m vdi3814.cli import C:\Projekte\Listen      :: Ordner importieren
 python -m vdi3814.cli import liste.pdf --nur-pruefen :: nur erkennen, nichts speichern
 python -m vdi3814.cli list                           :: importierte Dateien anzeigen
@@ -259,4 +299,19 @@ vdi3814/
 sample_data/           Beispieldatensatz (Generator + PDFs)
 docs/                  Spalten-Mapping
 tests/                 Pytest-Suite
+launcher.py            Einstiegspunkt der EXE (Oberfläche bzw. Kommandozeile)
+vdi3814.spec           PyInstaller-Beschreibung des Windows-Builds
+.github/workflows/     Build der Windows-EXE inkl. Prüfung des Ergebnisses
 ```
+
+### Windows-EXE selbst bauen
+
+```bat
+pip install -r requirements.txt pyinstaller
+pyinstaller vdi3814.spec --noconfirm
+dist\VDI3814-DP-Checker\VDI3814-DP-Checker.exe selbsttest
+```
+
+Der GitHub-Workflow macht genau das und prüft das Ergebnis anschließend mit
+einem vollständigen Durchlauf (Profile laden → Selbsttest der Oberfläche →
+Import → Datenbank → Excel-Export → Serverstart), bevor das ZIP veröffentlicht wird.
