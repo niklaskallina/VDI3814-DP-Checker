@@ -57,6 +57,40 @@ def cmd_check(args) -> int:
     return 0
 
 
+def ui_app_path() -> Path:
+    """Pfad zum Streamlit-Skript - auch im gepackten Zustand (.exe)."""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parents[1]
+    return base / "vdi3814" / "ui" / "app.py"
+
+
+def cmd_selftest(args) -> int:
+    """Fuehrt das Oberflaechen-Skript einmal komplett aus.
+
+    Wichtig fuer den EXE-Build: er prueft, dass Streamlit, die Profile und alle
+    verzoegert importierten Module im gepackten Zustand tatsaechlich vorhanden
+    sind - ein blosser HTTP-Test wuerde das nicht zeigen, weil das Skript erst
+    beim Verbinden eines Browsers laeuft.
+    """
+    app_path = ui_app_path()
+    if not app_path.exists():
+        print(f"Oberflaechen-Skript nicht gefunden: {app_path}", file=sys.stderr)
+        return 1
+    from streamlit.testing.v1 import AppTest
+
+    print(f"Oberflaeche wird geprueft: {app_path}")
+    app = AppTest.from_file(str(app_path), default_timeout=180)
+    app.run()
+    if app.exception:
+        for exception in app.exception:
+            print(f"  FEHLER: {exception.value}", file=sys.stderr)
+        return 1
+    print(f"  ok - {len(app.tabs)} Reiter, {len(app.dataframe)} Tabellen aufgebaut")
+    return 0
+
+
 def cmd_import(args) -> int:
     files = collect_files(args.pfade)
     if not files:
@@ -161,6 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="Installation und Modellverfuegbarkeit pruefen")
     check.set_defaults(func=cmd_check)
+
+    selftest = sub.add_parser("selbsttest", help="Oberflaeche einmal komplett ausfuehren")
+    selftest.set_defaults(func=cmd_selftest)
 
     imp = sub.add_parser("import", help="Dateien/Ordner importieren")
     imp.add_argument("pfade", nargs="+", help="Dateien oder Ordner (PDF/PNG/JPEG/XLSX/XLS)")

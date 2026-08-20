@@ -80,12 +80,21 @@ jobs:
         run: |
           $exe = "dist/$env:APP_NAME/$env:APP_NAME.exe"
 
-          # 1. Kommandozeile: Profile muessen geladen werden koennen
-          & $exe profile | Tee-Object -Variable profileOut
+          # 1. Kommandozeile: sind die Spaltenprofile mitgepackt?
+          # (Out-String, damit -notmatch auf einem Text und nicht auf einem
+          #  Zeilen-Array arbeitet)
+          $profileOut = (& $exe profile | Out-String)
+          Write-Host $profileOut
           if ($LASTEXITCODE -ne 0) { throw "CLI-Aufruf 'profile' fehlgeschlagen" }
-          if ($profileOut -notmatch "vdi3814_alt") { throw "Spaltenprofile fehlen im Build" }
+          if ($profileOut -notmatch "vdi3814_alt") { throw "Profil der alten Fassung fehlt im Build" }
+          if ($profileOut -notmatch "vdi3814_neu") { throw "Profil der neuen Fassung fehlt im Build" }
 
-          # 2. Vollstaendiger Ablauf: Import -> Datenbank -> Excel-Export
+          # 2. Oberflaechen-Skript einmal komplett ausfuehren. Zeigt sofort,
+          #    ob Streamlit und alle verzoegerten Importe gepackt wurden.
+          & $exe selbsttest
+          if ($LASTEXITCODE -ne 0) { throw "Selbsttest der Oberflaeche fehlgeschlagen" }
+
+          # 3. Vollstaendiger Ablauf: Import -> Datenbank -> Excel-Export
           & $exe import sample_data --kein-modell
           if ($LASTEXITCODE -ne 0) { throw "Import fehlgeschlagen" }
           & $exe export pruef.xlsx
@@ -93,10 +102,11 @@ jobs:
           if (-not (Test-Path pruef.xlsx)) { throw "Excel-Datei wurde nicht erzeugt" }
           Write-Host "Excel-Export erzeugt: $((Get-Item pruef.xlsx).Length) Bytes"
 
-          # 3. Oberflaeche: startet der Streamlit-Server?
-          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          # 4. Server der Oberflaeche muss tatsaechlich lauschen
+          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden `
+                       -RedirectStandardOutput ui-out.log -RedirectStandardError ui-err.log
           $ready = $false
-          foreach ($attempt in 1..40) {
+          foreach ($attempt in 1..20) {
             Start-Sleep -Seconds 3
             foreach ($port in 8501..8505) {
               try {
@@ -111,13 +121,18 @@ jobs:
             if ($ready) { break }
           }
           Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-          if (-not $ready) { throw "Oberflaeche war nicht erreichbar" }
+          if (-not $ready) {
+            Write-Host "--- Ausgabe der Anwendung ---"
+            Get-Content ui-out.log, ui-err.log -ErrorAction SilentlyContinue
+            throw "Oberflaeche war nicht erreichbar"
+          }
 
       - name: Aufraeumen vor dem Packen
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force "dist/$env:APP_NAME/data" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "dist/$env:APP_NAME/out" -ErrorAction SilentlyContinue
+          Remove-Item -Force "dist/$env:APP_NAME/ui-out.log", "dist/$env:APP_NAME/ui-err.log" -ErrorAction SilentlyContinue
 
       - name: ZIP schnueren
         shell: pwsh
