@@ -238,7 +238,16 @@ def _bereinige_beschriftung(text: str) -> str:
     """
     text = _LABEL_MUELL.sub(" ", text or "")
     text = re.sub(r"\s+", " ", text).strip(" .,:;-")
-    return text
+    # Ein senkrechter Zellrahmen wird gern als einzelner Buchstabe gelesen
+    # ("lAussentemperatur", "g FBH Kita"). Einzelne Buchstaben am Anfang
+    # gehoeren nie zu einer Datenpunktbezeichnung - Ziffern dagegen schon,
+    # das ist die Zeilennummer.
+    # (Die fuehrende Zeilennummer bleibt dabei erhalten.)
+    # Nur KLEINbuchstaben entfernen - Abkuerzungen wie "WT Heizung" oder
+    # "STW" beginnen mit Grossbuchstaben und muessen erhalten bleiben.
+    text = re.sub(r"^(\d{1,3}\s+)?[a-zäöü](?=[A-ZÄÖÜ])", r"\1", text)
+    text = re.sub(r"^(\d{1,3}\s+)?[a-zäöü]\s+(?=\S)", r"\1", text)
+    return text.strip()
 
 
 def zellen_ocr(image: Image.Image, spalten_kanten: list[float], zeilen_kanten: list[int],
@@ -268,10 +277,15 @@ def zellen_ocr(image: Image.Image, spalten_kanten: list[float], zeilen_kanten: l
         # Beschriftung der Zeile (links der ersten Funktionsspalte). Bewusst
         # zeilenweise: ein Sammeldurchgang ueber die ganze Spalte liest die
         # Datenpunktnamen deutlich schlechter.
-        bereich = arr[oben + 2:unten - 1, 0:int(label_rechts)]
+        # Rand grosszuegig wegschneiden und vergroessern: die Zellrahmen sonst
+        # als Buchstaben gelesen ("2jwr Heizung" statt "2 WT Heizung").
+        rand = max(2, int((unten - oben) * 0.12))
+        bereich = arr[oben + rand:unten - rand, rand:int(label_rechts) - rand]
         if _hat_inhalt(bereich, schwelle=0.004):
-            zuschnitt = grau.crop((0, oben + 1, int(label_rechts), unten - 1))
+            zuschnitt = grau.crop((rand, oben + rand, int(label_rechts) - rand, unten - rand))
             if zuschnitt.width > 10 and zuschnitt.height > 6:
+                zuschnitt = zuschnitt.resize(
+                    (zuschnitt.width * 3, zuschnitt.height * 3), Image.LANCZOS)
                 text = _bereinige_beschriftung(pytesseract.image_to_string(
                     zuschnitt, lang=lang, config="--psm 7"))
                 if text:
