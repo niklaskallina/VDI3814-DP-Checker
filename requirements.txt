@@ -1,0 +1,16 @@
+# Kern-Pipeline
+pymupdf>=1.24          # PDF -> Bild (rasterisieren), auch fuer gescannte PDFs
+pillow>=10.0           # Bildvorverarbeitung (Graustufen, Kontrast, Deskew, Skalierung)
+numpy>=1.26            # Deskew / einfache Bildanalyse
+requests>=2.31         # HTTP-Client fuer die lokale Ollama-API (localhost)
+pyyaml>=6.0            # Spalten-Profile (Mapping alt/neu)
+pandas>=2.0            # Aggregation / Drilldown
+openpyxl>=3.1          # Excel-Export inkl. Formeln
+SQLAlchemy>=2.0        # lokale SQLite-Datenbank
+streamlit>=1.30        # lokale Oberflaeche (Upload, Vorschau/Korrektur, Export)
+
+# Optional, aber empfohlen (ergaenzendes lokales OCR)
+pytesseract>=0.3.10    # benoetigt zusaetzlich die Tesseract-Installation (siehe README)
+
+# Entwicklung
+pytest>=8.0

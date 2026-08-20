@@ -1,0 +1,230 @@
+# ---------------------------------------------------------------------------
+# Spalten-Profil: VDI 3814 Blatt 1 (alte Fassung)
+# Referenz: "Beiblatt 070-5 / DIN EN ISO 16484-3:2005-12 / VDI 3814 Blatt 1:2009-11",
+#           GA-Funktionsliste, 50 Funktionsspalten + Bemerkungsspalte.
+# ---------------------------------------------------------------------------
+# Der Tabellenkopf enthaelt zwei Nummernzeilen:
+#   "Abschnitt"  ->  1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+#   "Spalte"     ->  1-5 | 1-5 | 1-6 | 1-5 | 1-8 | 1-13 | 1-4 | 1-4 | (9 = Bemerkung)
+# Daraus ergibt sich die eindeutige Spaltenadresse (z. B. 6.13 = Tarifabhaengiges
+# Schalten). Das Tool nutzt primaer diese Adresse; Labeltexte dienen als
+# Rueckfallebene, wenn die Nummernzeilen nicht lesbar sind.
+#
+# Erweiterung: Datei kopieren, "id" aendern, Spalten anpassen, hier ablegen.
+# ---------------------------------------------------------------------------
+id: vdi3814_alt
+name: "VDI 3814 Blatt 1 (alte Fassung) / DIN EN ISO 16484-3"
+fassung: alt
+priority: 10
+
+detection:
+  min_score: 3.0
+  keywords:
+    - {text: "Verarbeitungsfunktionen", weight: 3.0}
+    - {text: "Rechnen/Optimieren", weight: 2.5}
+    - {text: "Bedienfunktionen", weight: 1.5}
+    - {text: "Managementfunktionen", weight: 1.5}
+    - {text: "Ein-/Ausgabefunktionen", weight: 1.0}
+    - {text: "Gemeinsam", weight: 1.0}
+    - {text: "Physikalisch", weight: 0.5}
+    - {text: "16484-3", weight: 2.0}
+    - {text: "VDI 3814 Blatt 1", weight: 2.5}
+    - {text: "Beiblatt 070-5", weight: 3.0}
+    - {text: "Ueberwachen", weight: 1.0}
+    - {text: "Benennung", weight: 0.5}
+  negative_keywords:
+    - {text: "Anwendungsfunktionen", weight: 3.0}
+    - {text: "B-/A-Funktionen", weight: 2.5}
+    - {text: "Sonnenschutz", weight: 1.5}
+    - {text: "Bemerkungen und Referenzierungen", weight: 1.5}
+
+row_fields:
+  - {key: row_no,    label: "Zeile Nr.",   aliases: ["Zeile Nr", "Nr.", "Zeile"]}
+  - {key: klartext,  label: "Benennung",   aliases: ["Benennung", "Datenpunkt", "DP-Name", "Bezeichnung"]}
+  - {key: bas,       label: "Benutzeradresse", aliases: ["BAS", "Benutzeradresse", "Adresse", "DP-Nr"]}
+  - {key: qualifier, label: "Anlage/Aggregat", aliases: ["Anlage", "Aggregat", "Typ"]}
+
+columns:
+  # ---------------- Abschnitt 1: 1 Physikalisch ----------------
+  - {key: A_1_1, address: "1.1", group: "Ein-/Ausgabefunktionen", subgroup: "1 Physikalisch",
+     label: "Binäre Ausgabe Schalten/Stellen", abbrev: "BA", aggregate_group: EIN_AUSGABE,
+     footnotes: ["1"], aliases: ["Binäre Ausgabe", "Schalten/Stellen", "BA"]}
+  - {key: A_1_2, address: "1.2", group: "Ein-/Ausgabefunktionen", subgroup: "1 Physikalisch",
+     label: "Analoge Ausgabe Stellen", abbrev: "AA", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Analoge Ausgabe", "Stellen", "AA"]}
+  - {key: A_1_3, address: "1.3", group: "Ein-/Ausgabefunktionen", subgroup: "1 Physikalisch",
+     label: "Binäre Eingabe Melden", abbrev: "BE-M", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Binäre Eingabe Melden", "Melden"]}
+  - {key: A_1_4, address: "1.4", group: "Ein-/Ausgabefunktionen", subgroup: "1 Physikalisch",
+     label: "Binäre Eingabe Zählen", abbrev: "BE-Z", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Binäre Eingabe Zählen", "Zählen", "Zaehlen"]}
+  - {key: A_1_5, address: "1.5", group: "Ein-/Ausgabefunktionen", subgroup: "1 Physikalisch",
+     label: "Analoge Eingabe Messen", abbrev: "AE", aggregate_group: EIN_AUSGABE,
+     footnotes: ["2"], aliases: ["Analoge Eingabe", "Messen", "AE"]}
+
+  # ---------------- Abschnitt 2: 2 Gemeinsam (kommunikativ) ----------------
+  - {key: A_2_1, address: "2.1", group: "Ein-/Ausgabefunktionen", subgroup: "2 Gemeinsam (kommunikativ)",
+     label: "Binärer Ausgabewert, Schalten", abbrev: "BAW", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Binärer Ausgabewert", "Ausgabewert Schalten"]}
+  - {key: A_2_2, address: "2.2", group: "Ein-/Ausgabefunktionen", subgroup: "2 Gemeinsam (kommunikativ)",
+     label: "Analoger Ausgabewert, Stellen/Sollwert", abbrev: "AAW", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Analoger Ausgabewert", "Sollwert"]}
+  - {key: A_2_3, address: "2.3", group: "Ein-/Ausgabefunktionen", subgroup: "2 Gemeinsam (kommunikativ)",
+     label: "Binärer Eingabewert, Zustand", abbrev: "BEW", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Binärer Eingabewert", "Zustand"]}
+  - {key: A_2_4, address: "2.4", group: "Ein-/Ausgabefunktionen", subgroup: "2 Gemeinsam (kommunikativ)",
+     label: "Zählwerteingabe", abbrev: "ZWE", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Zählwerteingabe", "Zaehlwerteingabe"]}
+  - {key: A_2_5, address: "2.5", group: "Ein-/Ausgabefunktionen", subgroup: "2 Gemeinsam (kommunikativ)",
+     label: "Analoger Eingabewert, Messen", abbrev: "AEW", aggregate_group: EIN_AUSGABE,
+     footnotes: [], aliases: ["Analoger Eingabewert"]}
+
+  # ---------------- Abschnitt 3: 3 Überwachen ----------------
+  - {key: A_3_1, address: "3.1", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Grenzwert fest", abbrev: "GWF", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Grenzwert fest"]}
+  - {key: A_3_2, address: "3.2", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Grenzwert gleitend", abbrev: "GWG", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Grenzwert gleitend"]}
+  - {key: A_3_3, address: "3.3", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Betriebsstunden-Erfassung", abbrev: "BSE", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Betriebsstunden", "Betriebsstundenerfassung"]}
+  - {key: A_3_4, address: "3.4", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Ereigniszählung", abbrev: "EZ", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Ereigniszählung", "Ereigniszaehlung"]}
+  - {key: A_3_5, address: "3.5", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Befehlsausführkontrolle", abbrev: "BAK", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Befehlsausführkontrolle", "Befehlsausfuehrkontrolle"]}
+  - {key: A_3_6, address: "3.6", group: "Verarbeitungsfunktionen", subgroup: "3 Überwachen",
+     label: "Meldungsbearbeitung", abbrev: "MB", aggregate_group: VERARBEITUNG,
+     footnotes: ["4"], aliases: ["Meldungsbearbeitung"]}
+
+  # ---------------- Abschnitt 4: 4 Steuern ----------------
+  - {key: A_4_1, address: "4.1", group: "Verarbeitungsfunktionen", subgroup: "4 Steuern",
+     label: "Anlagensteuerung", abbrev: "ANS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Anlagensteuerung"]}
+  - {key: A_4_2, address: "4.2", group: "Verarbeitungsfunktionen", subgroup: "4 Steuern",
+     label: "Motorsteuerung", abbrev: "MOS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Motorsteuerung"]}
+  - {key: A_4_3, address: "4.3", group: "Verarbeitungsfunktionen", subgroup: "4 Steuern",
+     label: "Umschaltung", abbrev: "UMS", aggregate_group: VERARBEITUNG,
+     footnotes: ["5"], aliases: ["Umschaltung"]}
+  - {key: A_4_4, address: "4.4", group: "Verarbeitungsfunktionen", subgroup: "4 Steuern",
+     label: "Folgesteuerung", abbrev: "FST", aggregate_group: VERARBEITUNG,
+     footnotes: ["5"], aliases: ["Folgesteuerung"]}
+  - {key: A_4_5, address: "4.5", group: "Verarbeitungsfunktionen", subgroup: "4 Steuern",
+     label: "Sicherheits-/Frostschutzsteuerung", abbrev: "SFS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Frostschutz", "Sicherheitssteuerung"]}
+
+  # ---------------- Abschnitt 5: 5 Regeln ----------------
+  - {key: A_5_1, address: "5.1", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "P-Regelung", abbrev: "P", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["P-Regelung"]}
+  - {key: A_5_2, address: "5.2", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "PI-/PID-Regelung", abbrev: "PID", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["PI-Regelung", "PID-Regelung"]}
+  - {key: A_5_3, address: "5.3", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Sollwertführung/-kennlinie", abbrev: "SWF", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Sollwertführung", "Sollwertkennlinie"]}
+  - {key: A_5_4, address: "5.4", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Stellausgabe stetig", abbrev: "SAS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Stellausgabe stetig"]}
+  - {key: A_5_5, address: "5.5", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Stellausgabe 2-Punkt", abbrev: "SA2", aggregate_group: VERARBEITUNG,
+     footnotes: ["6"], aliases: ["Stellausgabe 2-Punkt", "2-Punkt", "3-Punkt"]}
+  - {key: A_5_6, address: "5.6", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Stellausgabe Pulsweitenmodulation", abbrev: "PWM", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Pulsweitenmodulation", "PWM"]}
+  - {key: A_5_7, address: "5.7", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Begrenzung Sollwert/Stellgröße", abbrev: "BEG", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Begrenzung Sollwert", "Begrenzung Stellgösse", "Stellgrösse"]}
+  - {key: A_5_8, address: "5.8", group: "Verarbeitungsfunktionen", subgroup: "5 Regeln",
+     label: "Parameterumschaltung", abbrev: "PUM", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Parameterumschaltung"]}
+
+  # ---------------- Abschnitt 6: 6 Rechnen/Optimieren ----------------
+  - {key: A_6_1, address: "6.1", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "h,x geführte Strategie", abbrev: "HXS", aggregate_group: VERARBEITUNG,
+     footnotes: ["7"], aliases: ["h,x geführte Strategie", "hx"]}
+  - {key: A_6_2, address: "6.2", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Arithmetische Berechnung", abbrev: "ARB", aggregate_group: VERARBEITUNG,
+     footnotes: ["7"], aliases: ["Arithmetische Berechnung", "Arithmetik"]}
+  - {key: A_6_3, address: "6.3", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Ereignisabhängiges Schalten", abbrev: "EAS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Ereignisabhängiges Schalten"]}
+  - {key: A_6_4, address: "6.4", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Zeitabhängiges Schalten", abbrev: "ZAS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Zeitabhängiges Schalten", "Zeitprogramm"]}
+  - {key: A_6_5, address: "6.5", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Gleitendes Ein-/Ausschalten", abbrev: "GEA", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Gleitendes Ein-/Ausschalten"]}
+  - {key: A_6_6, address: "6.6", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Zyklisches Schalten", abbrev: "ZYS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Zyklisches Schalten"]}
+  - {key: A_6_7, address: "6.7", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Nachtkühlbetrieb", abbrev: "NKB", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Nachtkühlbetrieb", "Nachtkuehlbetrieb"]}
+  - {key: A_6_8, address: "6.8", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Raumtemperaturbegrenzung", abbrev: "RTB", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Raumtemperaturbegrenzung", "Gebäudetemperaturbegrenzung"]}
+  - {key: A_6_9, address: "6.9", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Energierückgewinnung", abbrev: "ERG", aggregate_group: VERARBEITUNG,
+     footnotes: ["7"], aliases: ["Energierückgewinnung", "WRG"]}
+  - {key: A_6_10, address: "6.10", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Netzersatzbetrieb", abbrev: "NEB", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Netzersatzbetrieb"]}
+  - {key: A_6_11, address: "6.11", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Netzwiederkehrprogramm", abbrev: "NWP", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Netzwiederkehrprogramm", "Netzwiederkehr"]}
+  - {key: A_6_12, address: "6.12", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Höchstlastbegrenzung", abbrev: "HLB", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Höchstlastbegrenzung", "Lastabwurf"]}
+  - {key: A_6_13, address: "6.13", group: "Verarbeitungsfunktionen", subgroup: "6 Rechnen/Optimieren",
+     label: "Tarifabhängiges Schalten", abbrev: "TAS", aggregate_group: VERARBEITUNG,
+     footnotes: [], aliases: ["Tarifabhängiges Schalten", "Tarif"]}
+
+  # ---------------- Abschnitt 7: 7 Managementfunktionen ----------------
+  - {key: A_7_1, address: "7.1", group: "Managementfunktionen", subgroup: "7 Managementfunktionen",
+     label: "Ein-/Ausgabe Objekttyp", abbrev: "EAO", aggregate_group: MANAGEMENT,
+     footnotes: ["9"], aliases: ["Ein-/Ausgabe Objekttyp", "Objekttyp"]}
+  - {key: A_7_2, address: "7.2", group: "Managementfunktionen", subgroup: "7 Managementfunktionen",
+     label: "Komplexer Objekttyp", abbrev: "KOT", aggregate_group: MANAGEMENT,
+     footnotes: ["8", "9"], aliases: ["Komplexer Objekttyp", "komplex"]}
+  - {key: A_7_3, address: "7.3", group: "Managementfunktionen", subgroup: "7 Managementfunktionen",
+     label: "Ereignis-Langzeitspeicherung", abbrev: "ELS", aggregate_group: MANAGEMENT,
+     footnotes: [], aliases: ["Ereignis-Langzeitspeicherung", "Langzeitspeicherung"]}
+  - {key: A_7_4, address: "7.4", group: "Managementfunktionen", subgroup: "7 Managementfunktionen",
+     label: "Historisierung in Datenbank", abbrev: "HDB", aggregate_group: MANAGEMENT,
+     footnotes: [], aliases: ["Historisierung in Datenbank", "Historisierung"]}
+
+  # ---------------- Abschnitt 8: 8 Bedienfunktionen ----------------
+  - {key: A_8_1, address: "8.1", group: "Bedienfunktionen", subgroup: "8 Bedienfunktionen",
+     label: "Grafik/Anlagenbild", abbrev: "GAB", aggregate_group: BEDIENUNG,
+     footnotes: [], aliases: ["Grafik", "Anlagenbild"]}
+  - {key: A_8_2, address: "8.2", group: "Bedienfunktionen", subgroup: "8 Bedienfunktionen",
+     label: "Dynamische Einblendung", abbrev: "DYE", aggregate_group: BEDIENUNG,
+     footnotes: [], aliases: ["Dynamische Einblendung", "Einblendung"]}
+  - {key: A_8_3, address: "8.3", group: "Bedienfunktionen", subgroup: "8 Bedienfunktionen",
+     label: "Ereignis-Anweisungstext", abbrev: "EAT", aggregate_group: BEDIENUNG,
+     footnotes: [], aliases: ["Ereignis-Anweisungstext", "Anweisungstext"]}
+  - {key: A_8_4, address: "8.4", group: "Bedienfunktionen", subgroup: "8 Bedienfunktionen",
+     label: "Nachricht an externe Stelle", abbrev: "NES", aggregate_group: BEDIENUNG,
+     footnotes: [], aliases: ["Nachricht an externe Stelle", "externe Stelle"]}
+
+# ---------------- Abschnitt 9: Bemerkungen (Freitext, wird NICHT gezaehlt) ----
+note_columns:
+  - {key: NOTE_BEM, address: "9", label: "Bemerkungen",
+     aliases: ["Bemerkung", "Bemerkungen", "Hinweis", "Anmerkung"]}
+
+# Fussnoten der Kopfzeile (Zaehlregeln). Werden beim Import mit dem Dokument
+# gespeichert und im Excel-Export je Spalte als Hinweis mitgefuehrt.
+footnotes:
+  - {marker: "1", text: "Dauerbefehl: z. B. 0,I,II = 2 BA / Impulsbefehl: z. B. 0,I,II = 3 BA / Stellbefehl: z. B. Zu-0-Auf = 2 BA / Pulsweitenmod. = 1 BA"}
+  - {marker: "2", text: "aktiv oder passiv"}
+  - {marker: "3", text: "nur gemeinsame, kommunikative Datenpunkte von Fremdsystemen für interoperable Funktionen"}
+  - {marker: "4", text: "pro Eingangs-Benutzeradresse zum a) Zusammenfassen, b) Verzögern und c) Unterdrücken von Meldungen"}
+  - {marker: "5", text: "pro Ausgangs-Benutzeradresse"}
+  - {marker: "6", text: "Stellausgabe: z. B. 3-Punkt = 2 x 2-Punkt, Pulsweitenmod. = 1 BA"}
+  - {marker: "7", text: "pro Eingangs-Benutzeradresse"}
+  - {marker: "8", text: "z. B. Gerätestatus, Zeitschalttab., Sicherheitspkt., Regler, Datei (DIN EN ISO 16484-5)"}
+  - {marker: "9", text: "Falls erforderlich sind bei gemeinsamen (shared) Datenpunkten die Funktionen im Client mit \"A\" und die im Server mit \"B\" zu kennzeichnen (siehe BIBBs)."}

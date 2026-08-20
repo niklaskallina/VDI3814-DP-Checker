@@ -1,0 +1,186 @@
+# ---------------------------------------------------------------------------
+# Spalten-Profil: VDI 3814 (neue Fassung)
+# Referenz: offizielle Vorlage "VDI3814-GA-Funktionsliste_Vorlage_2022-07"
+#           (Beispiel VDI 3814 Blatt 4.3), 57 Funktionsspalten + Bemerkungsspalte.
+# ---------------------------------------------------------------------------
+# Der Tabellenkopf enthaelt zwei Nummernzeilen:
+#   "Abschnitt"  ->  0. | 1.1. | 1.2. | 1.3. | 2.1 | 2.2. | 2.3. | 2.4. | 2.5. |
+#                    2.6. | 2.7 | 3.1. | 4.
+#   "Spalte"     ->  je Abschnitt fortlaufend 1..n
+# Daraus ergibt sich die eindeutige Spaltenadresse (z. B. 2.2.10 =
+# Frostschutzsteuerung). Das Tool nutzt primaer diese Adresse; Labeltexte
+# dienen als Rueckfallebene, wenn die Nummernzeilen nicht lesbar sind
+# (die Spaltenkoepfe sind im Original senkrecht gesetzt und schlecht zu OCRen).
+# ---------------------------------------------------------------------------
+id: vdi3814_neu
+name: "VDI 3814 (neue Fassung, Vorlage 2022-07 / Blatt 4.3)"
+fassung: neu
+priority: 20
+
+detection:
+  min_score: 3.0
+  keywords:
+    - {text: "Anwendungsfunktionen", weight: 3.0}
+    - {text: "B-/A-Funktionen", weight: 2.5}
+    - {text: "Bemerkungen und Referenzierungen", weight: 2.0}
+    - {text: "Bedienung/Anzeige", weight: 1.5}
+    - {text: "Sonnenschutz", weight: 1.5}
+    - {text: "Integration", weight: 1.5}
+    - {text: "Beleuchtung", weight: 1.0}
+    - {text: "Komplexe", weight: 1.0}
+    - {text: "Benutzeradresse (BAS)", weight: 1.0}
+    - {text: "Blatt 4.3", weight: 2.0}
+    - {text: "Struktur", weight: 0.5}
+  negative_keywords:
+    - {text: "Verarbeitungsfunktionen", weight: 3.0}
+    - {text: "Rechnen/Optimieren", weight: 2.5}
+    - {text: "Bedienfunktionen", weight: 1.0}
+    - {text: "Beiblatt 070-5", weight: 3.0}
+
+row_fields:
+  - {key: row_no,    label: "Zeile Nr.",                     aliases: ["Zeile Nr", "Nr.", "Zeile"]}
+  - {key: klartext,  label: "Datenpunkt mit Klartext",       aliases: ["Datenpunkt", "Klartext", "Bezeichnung"]}
+  - {key: bas,       label: "Benutzeradresse (BAS)",         aliases: ["BAS", "Benutzeradresse", "Adresse"]}
+  - {key: qualifier, label: "Struktur",                      aliases: ["Struktur", "komplex", "Typ", "Abschnitt"]}
+
+columns:
+  # ---------------- Abschnitt 0. 0. Integration ----------------
+  - {key: N_0_1, address: "0.1", group: "0. Integration", subgroup: "",
+     label: "Integrationsart der Datenpunkte oder Grafiktyp", abbrev: "I", aggregate_group: INTEGRATION, aliases: ["Integration", "Integrationsart", "Grafiktyp"]}
+
+  # ---------------- Abschnitt 1.1. 1.1 Physikalische ----------------
+  - {key: N_1_1_1, address: "1.1.1", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.1 Physikalische",
+     label: "Analoge Eingabe (AI)", abbrev: "AI", aggregate_group: EIN_AUSGABE, aliases: ["Analoge Eingabe", "AI"]}
+  - {key: N_1_1_2, address: "1.1.2", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.1 Physikalische",
+     label: "Binäre Eingabe (BI)", abbrev: "BI", aggregate_group: EIN_AUSGABE, aliases: ["Binäre Eingabe", "BI"]}
+  - {key: N_1_1_3, address: "1.1.3", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.1 Physikalische",
+     label: "Analoge Ausgabe (AO)", abbrev: "AO", aggregate_group: EIN_AUSGABE, aliases: ["Analoge Ausgabe", "AO"]}
+  - {key: N_1_1_4, address: "1.1.4", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.1 Physikalische",
+     label: "Binäre Ausgabe (BO)", abbrev: "BO", aggregate_group: EIN_AUSGABE, aliases: ["Binäre Ausgabe", "BO"]}
+
+  # ---------------- Abschnitt 1.2. 1.2 Werte ----------------
+  - {key: N_1_2_1, address: "1.2.1", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.2 Werte",
+     label: "Analogwert (AV)", abbrev: "AV", aggregate_group: EIN_AUSGABE, aliases: ["Analogwert", "AV"]}
+  - {key: N_1_2_2, address: "1.2.2", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.2 Werte",
+     label: "Binärwert(e) (BV/MV)", abbrev: "BV", aggregate_group: EIN_AUSGABE, aliases: ["Binärwert", "Binaerwert", "BV", "MV"]}
+
+  # ---------------- Abschnitt 1.3. 1.3 Komplexe ----------------
+  - {key: N_1_3_1, address: "1.3.1", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.3 Komplexe",
+     label: "Zeitplan (SCH)", abbrev: "SCH", aggregate_group: EIN_AUSGABE, aliases: ["Zeitplan", "SCH", "Schedule"]}
+  - {key: N_1_3_2, address: "1.3.2", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.3 Komplexe",
+     label: "Kalender (CAL)", abbrev: "CAL", aggregate_group: EIN_AUSGABE, aliases: ["Kalender", "CAL"]}
+  - {key: N_1_3_3, address: "1.3.3", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.3 Komplexe",
+     label: "Alarm-/Ereignismeldung (NC)", abbrev: "NC", aggregate_group: EIN_AUSGABE, aliases: ["Alarm-/Ereignismeldung", "Ereignismeldung", "NC"]}
+  - {key: N_1_3_4, address: "1.3.4", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.3 Komplexe",
+     label: "Datenaufzeichnung (LOG)", abbrev: "LOG", aggregate_group: EIN_AUSGABE, aliases: ["Datenaufzeichnung", "LOG", "Trendlog"]}
+  - {key: N_1_3_5, address: "1.3.5", group: "1. Ein-/Ausgabefunktionen", subgroup: "1.3 Komplexe",
+     label: "Sonstige komplexe Objekte (KO)", abbrev: "KO", aggregate_group: EIN_AUSGABE, aliases: ["Sonstigen Komplexe Objekte", "komplexe Objekte", "KO"]}
+
+  # ---------------- Abschnitt 2.1 2.1 Logik ----------------
+  - {key: N_2_1_1, address: "2.1.1", group: "2. Anwendungsfunktionen", subgroup: "2.1 Logik",
+     label: "Zeiten (TP, TON, TOFF)", abbrev: "ZEIT", aggregate_group: ANWENDUNG, aliases: ["Zeiten", "TON", "TOFF", "TP"]}
+  - {key: N_2_1_2, address: "2.1.2", group: "2. Anwendungsfunktionen", subgroup: "2.1 Logik",
+     label: "Arithmetische Berechnung", abbrev: "ARB", aggregate_group: ANWENDUNG, aliases: ["Arithmetische Berechnung", "Arithmetik"]}
+
+  # ---------------- Abschnitt 2.2. 2.2 Überwachung und Steuerung ----------------
+  - {key: N_2_2_1, address: "2.2.1", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Grenzwertüberwachung", abbrev: "GWU", aggregate_group: ANWENDUNG, aliases: ["Grenzwertüberwachung", "Grenzwert"]}
+  - {key: N_2_2_2, address: "2.2.2", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Betriebsstundenüberwachung", abbrev: "BSU", aggregate_group: ANWENDUNG, aliases: ["Betriebsstundenüberwachung", "Betriebsstunden"]}
+  - {key: N_2_2_3, address: "2.2.3", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Ereignisüberwachung (Zählung)", abbrev: "EZU", aggregate_group: ANWENDUNG, aliases: ["Ereignisüberwachung", "Ereigniszählung"]}
+  - {key: N_2_2_4, address: "2.2.4", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Befehlsausführüberwachung", abbrev: "BAU", aggregate_group: ANWENDUNG, aliases: ["Befehlsausführüberwachung", "Befehlsausführkontrolle"]}
+  - {key: N_2_2_5, address: "2.2.5", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Anlagen-/Gerätestatus", abbrev: "AGS", aggregate_group: ANWENDUNG, aliases: ["Anlagen-/Gerätestatus", "Gerätestatus"]}
+  - {key: N_2_2_6, address: "2.2.6", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Motorsteuerung", abbrev: "MOS", aggregate_group: ANWENDUNG, aliases: ["Motorsteuerung"]}
+  - {key: N_2_2_7, address: "2.2.7", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Blockierschutz", abbrev: "BLS", aggregate_group: ANWENDUNG, aliases: ["Blockierschutz"]}
+  - {key: N_2_2_8, address: "2.2.8", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Umschaltung (Analogwert)", abbrev: "UMS", aggregate_group: ANWENDUNG, aliases: ["Umschaltung"]}
+  - {key: N_2_2_9, address: "2.2.9", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Folgesteuerung", abbrev: "FST", aggregate_group: ANWENDUNG, aliases: ["Folgesteuerung"]}
+  - {key: N_2_2_10, address: "2.2.10", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Frostschutzsteuerung", abbrev: "FRS", aggregate_group: ANWENDUNG, aliases: ["Frostschutzsteuerung", "Frostschutz"]}
+  - {key: N_2_2_11, address: "2.2.11", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Sicherheitssteuerung", abbrev: "SIS", aggregate_group: ANWENDUNG, aliases: ["Sicherheitssteuerung"]}
+  - {key: N_2_2_12, address: "2.2.12", group: "2. Anwendungsfunktionen", subgroup: "2.2 Überwachung und Steuerung",
+     label: "Prioritätssteuerung", abbrev: "PRS", aggregate_group: ANWENDUNG, aliases: ["Prioritätssteuerung", "Priorität"]}
+
+  # ---------------- Abschnitt 2.3. 2.3 Regelung ----------------
+  - {key: N_2_3_1, address: "2.3.1", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "P-/ PI- / PID-Regler", abbrev: "REG", aggregate_group: ANWENDUNG, aliases: ["PID-Regler", "PI-Regler", "P-Regler"]}
+  - {key: N_2_3_2, address: "2.3.2", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Sollwertführung / -kennlinie", abbrev: "SWF", aggregate_group: ANWENDUNG, aliases: ["Sollwertführung", "Kennlinie"]}
+  - {key: N_2_3_3, address: "2.3.3", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Stellausgabe stetig", abbrev: "SAS", aggregate_group: ANWENDUNG, aliases: ["Stellausgabe stetig"]}
+  - {key: N_2_3_4, address: "2.3.4", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Stellausgabe 2-Punkt", abbrev: "SA2", aggregate_group: ANWENDUNG, aliases: ["Stellausgabe 2-Punkt", "2-Punkt"]}
+  - {key: N_2_3_5, address: "2.3.5", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Stellausgabe 3-Punkt", abbrev: "SA3", aggregate_group: ANWENDUNG, aliases: ["Stellausgabe 3-Punkt", "3-Punkt"]}
+  - {key: N_2_3_6, address: "2.3.6", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Stellausgabe 3-Punkt mit variabler Impulslänge", abbrev: "SA3V", aggregate_group: ANWENDUNG, aliases: ["variabler Impulslänge"]}
+  - {key: N_2_3_7, address: "2.3.7", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Stellausgabe Pulsweitenmodulation", abbrev: "PWM", aggregate_group: ANWENDUNG, aliases: ["Pulsweitenmodulation", "PWM"]}
+  - {key: N_2_3_8, address: "2.3.8", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Begrenzung Sollwert/Stellwert", abbrev: "BEG", aggregate_group: ANWENDUNG, aliases: ["Begrenzung Sollwert", "Begrenzung Stellwert"]}
+  - {key: N_2_3_9, address: "2.3.9", group: "2. Anwendungsfunktionen", subgroup: "2.3 Regelung",
+     label: "Parameterumschaltung", abbrev: "PUM", aggregate_group: ANWENDUNG, aliases: ["Parameterumschaltung"]}
+
+  # ---------------- Abschnitt 2.4. 2.4 Optimierung ----------------
+  - {key: N_2_4_1, address: "2.4.1", group: "2. Anwendungsfunktionen", subgroup: "2.4 Optimierung",
+     label: "Energieniveau", abbrev: "ENI", aggregate_group: ANWENDUNG, aliases: ["Energieniveau"]}
+  - {key: N_2_4_2, address: "2.4.2", group: "2. Anwendungsfunktionen", subgroup: "2.4 Optimierung",
+     label: "Energierückgewinnung", abbrev: "ERG", aggregate_group: ANWENDUNG, aliases: ["Energierückgewinnung", "WRG"]}
+  - {key: N_2_4_3, address: "2.4.3", group: "2. Anwendungsfunktionen", subgroup: "2.4 Optimierung",
+     label: "h,x-Sollwertführung", abbrev: "HXS", aggregate_group: ANWENDUNG, aliases: ["h,x-Sollwertführung", "hx"]}
+  - {key: N_2_4_4, address: "2.4.4", group: "2. Anwendungsfunktionen", subgroup: "2.4 Optimierung",
+     label: "Schaltzeitpunktoptimierung", abbrev: "SZO", aggregate_group: ANWENDUNG, aliases: ["Schaltzeitpunktoptimierung", "Schaltzeitoptimierung"]}
+  - {key: N_2_4_5, address: "2.4.5", group: "2. Anwendungsfunktionen", subgroup: "2.4 Optimierung",
+     label: "Nachtkühlung", abbrev: "NKB", aggregate_group: ANWENDUNG, aliases: ["Nachtkühlung", "Nachtkuehlung"]}
+
+  # ---------------- Abschnitt 2.5. 2.5 Beleuchtung ----------------
+  - {key: N_2_5_1, address: "2.5.1", group: "2. Anwendungsfunktionen", subgroup: "2.5 Beleuchtung",
+     label: "Lichtsteuerung", abbrev: "LIS", aggregate_group: ANWENDUNG, aliases: ["Lichtsteuerung"]}
+  - {key: N_2_5_2, address: "2.5.2", group: "2. Anwendungsfunktionen", subgroup: "2.5 Beleuchtung",
+     label: "Treppenlichtschaltung", abbrev: "TLS", aggregate_group: ANWENDUNG, aliases: ["Treppenlichtschaltung", "Treppenlicht"]}
+  - {key: N_2_5_3, address: "2.5.3", group: "2. Anwendungsfunktionen", subgroup: "2.5 Beleuchtung",
+     label: "Tageslichtschaltung", abbrev: "TLA", aggregate_group: ANWENDUNG, aliases: ["Tageslichtschaltung", "Tageslicht"]}
+  - {key: N_2_5_4, address: "2.5.4", group: "2. Anwendungsfunktionen", subgroup: "2.5 Beleuchtung",
+     label: "Konstantlichtregelung", abbrev: "KLR", aggregate_group: ANWENDUNG, aliases: ["Konstantlichtregelung", "Konstantlicht"]}
+
+  # ---------------- Abschnitt 2.6. 2.6 Sonnenschutz ----------------
+  - {key: N_2_6_1, address: "2.6.1", group: "2. Anwendungsfunktionen", subgroup: "2.6 Sonnenschutz",
+     label: "Sonnenschutz stellen", abbrev: "SST", aggregate_group: ANWENDUNG, aliases: ["Sonnenschutz stellen", "Jalousie"]}
+  - {key: N_2_6_2, address: "2.6.2", group: "2. Anwendungsfunktionen", subgroup: "2.6 Sonnenschutz",
+     label: "Sonnen-/Dämmerungsautomatik", abbrev: "SDA", aggregate_group: ANWENDUNG, aliases: ["Dämmerungsautomatik", "Sonnenautomatik"]}
+  - {key: N_2_6_3, address: "2.6.3", group: "2. Anwendungsfunktionen", subgroup: "2.6 Sonnenschutz",
+     label: "Thermoautomatik", abbrev: "THA", aggregate_group: ANWENDUNG, aliases: ["Thermoautomatik"]}
+  - {key: N_2_6_4, address: "2.6.4", group: "2. Anwendungsfunktionen", subgroup: "2.6 Sonnenschutz",
+     label: "Witterungsschutz", abbrev: "WIS", aggregate_group: ANWENDUNG, aliases: ["Witterungsschutz", "Windwächter"]}
+  - {key: N_2_6_5, address: "2.6.5", group: "2. Anwendungsfunktionen", subgroup: "2.6 Sonnenschutz",
+     label: "Sonnenstandsberechnung", abbrev: "SSB", aggregate_group: ANWENDUNG, aliases: ["Sonnenstandsberechnung", "Sonnenstand"]}
+
+  # ---------------- Abschnitt 2.7 2.7 Sonstige ----------------
+  - {key: N_2_7_1, address: "2.7.1", group: "2. Anwendungsfunktionen", subgroup: "2.7 Sonstige",
+     label: "Sonstige Anwendungsfunktionen", abbrev: "SAF", aggregate_group: ANWENDUNG, aliases: ["Sonstige Anwendungsfunktionen", "Sonstige"]}
+
+  # ---------------- Abschnitt 3.1. 3.1 Bedienung/Anzeige ----------------
+  - {key: N_3_1_1, address: "3.1.1", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Automationsfunktionen und Parameter", abbrev: "AFP", aggregate_group: BEDIENUNG, aliases: ["Automationsfunktionen und Parameter", "Parameter"]}
+  - {key: N_3_1_2, address: "3.1.2", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Grafik", abbrev: "GRA", aggregate_group: BEDIENUNG, aliases: ["Grafik", "Anlagenbild"]}
+  - {key: N_3_1_3, address: "3.1.3", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Dynamisierung", abbrev: "DYN", aggregate_group: BEDIENUNG, aliases: ["Dynamisierung", "dynamische Einblendung"]}
+  - {key: N_3_1_4, address: "3.1.4", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Handlungsanweisung", abbrev: "HAW", aggregate_group: BEDIENUNG, aliases: ["Handlungsanweisung", "Anweisungstext"]}
+  - {key: N_3_1_5, address: "3.1.5", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Nachricht an externe Stellen", abbrev: "NES", aggregate_group: BEDIENUNG, aliases: ["Nachricht an externe Stellen", "externe Stelle"]}
+  - {key: N_3_1_6, address: "3.1.6", group: "3. B-/A-Funktionen", subgroup: "3.1 Bedienung/Anzeige",
+     label: "Historisierung in Datenbank", abbrev: "HDB", aggregate_group: BEDIENUNG, aliases: ["Historisierung in Datenbank", "Historisierung"]}
+
+# ---------------- Abschnitt 4: Bemerkungen (Freitext, wird NICHT gezaehlt) ----
+note_columns:
+  - {key: NOTE_BEM, address: "4.1", label: "Bemerkungen und Referenzierungen",
+     aliases: ["Bemerkungen und Referenzierungen", "Bemerkungen", "Referenzierungen", "Anmerkung"]}
