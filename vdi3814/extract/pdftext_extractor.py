@@ -34,8 +34,13 @@ _ADDR_RE = re.compile(r"^\d{1,2}(\.\d{1,2})*\.?$")
 
 
 def _is_rotated(word: Word) -> bool:
-    """Senkrecht gesetzter Text: Wortbox ist hoeher als breit."""
-    return (word[3] - word[1]) > (word[2] - word[0]) * 1.2
+    """Senkrecht gesetzter Text: Wortbox ist deutlich hoeher als breit.
+
+    Die Mindesthoehe verhindert Fehltreffer bei kurzen waagerechten Woertern
+    wie "01" oder "B", deren Box zufaellig hochkant wirkt.
+    """
+    height = word[3] - word[1]
+    return height > (word[2] - word[0]) * 1.6 and height > 12.0
 
 
 def _cx(word: Word) -> float:
@@ -221,7 +226,13 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
     )
     for row in rows:
         for index, word in enumerate(row):
+            # Beschriftungen aus zwei Woertern ("Blatt Nr.") mit beruecksichtigen
             key = normalize(word[4].rstrip(":"))
+            skip_next = 0
+            if key not in labels and index + 1 < len(row):
+                combined = normalize(f"{word[4]} {row[index + 1][4]}".rstrip(":"))
+                if combined in labels:
+                    key, skip_next = combined, 1
             field_name = labels.get(key)
             if not field_name or getattr(metadata, field_name):
                 continue
@@ -229,8 +240,8 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
                 continue
             # Wert = folgende Woerter derselben Zeile, bis zum naechsten Label
             values: list[str] = []
-            previous_right = word[2]
-            for follower in row[index + 1:]:
+            previous_right = row[index + skip_next][2]
+            for follower in row[index + 1 + skip_next:]:
                 follower_key = normalize(follower[4].rstrip(":"))
                 if follower_key in labels or follower_key in stop_words:
                     break
@@ -359,3 +370,42 @@ def extract_pdf_text(path: str | Path, page_index: int) -> RawTable | None:
         texts=[" ".join(w[4] for w in words)],
     )
     return table
+
+
+SCHEMA_KEYWORDS = (
+    "regelschema", "prinzipschaltbild", "anlagenschema", "strangschema",
+    "funktionsschema", "schaltplan", "r+i", "rls-schema",
+)
+TABLE_KEYWORDS = ("summe funktionen", "funktionsliste", "datenpunktliste",
+                  "verarbeitungsfunktionen", "anwendungsfunktionen")
+
+
+def classify_page_text(path: str | Path, page_index: int) -> tuple[str, float, str]:
+    """Klassifiziert eine PDF-Seite ohne Modell, allein aus der Textebene.
+
+    Rueckgabe: (typ, konfidenz, begruendung) mit typ aus
+    {"funktionsliste", "regelschema", "sonstiges", "unbekannt"}.
+    "unbekannt" heisst: bitte das Vision-Modell fragen.
+    """
+    import pymupdf
+
+    with pymupdf.open(path) as doc:
+        page = doc[page_index]
+        text = page.get_text()
+        words = page.get_text("words")
+        try:
+            drawings = len(page.get_drawings())
+        except Exception:                       # pragma: no cover
+            drawings = 0
+
+    lowered = normalize(text)
+    if len(text.strip()) < 30:
+        return "unbekannt", 0.0, "Keine verwertbare Textebene (vermutlich Scan)"
+    if any(normalize(keyword) in lowered for keyword in SCHEMA_KEYWORDS):
+        return "regelschema", 0.85, "Schema-Stichwort in der Textebene gefunden"
+    if any(normalize(keyword) in lowered for keyword in TABLE_KEYWORDS):
+        return "funktionsliste", 0.7, "Tabellen-Stichwort gefunden, aber kein Abschnitt-/Spalte-Raster"
+    # Viele Vektorpfade bei wenig Text sprechen fuer eine Zeichnung.
+    if drawings > 150 and len(words) < 400:
+        return "regelschema", 0.7, f"{drawings} Vektorpfade bei nur {len(words)} Woertern"
+    return "sonstiges", 0.5, "Kein Tabellenraster erkennbar"

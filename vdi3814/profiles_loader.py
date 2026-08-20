@@ -18,7 +18,11 @@ from .models import ColumnHeader
 from .textutil import normalize, normalize_address, similarity
 
 # Ab dieser Aehnlichkeit gilt eine gelesene Ueberschrift als Profil-Spalte.
-MATCH_THRESHOLD = 0.62
+# Bewusst streng: Bezeichnungen wie "Motorsteuerung" und "Folgesteuerung"
+# liegen rein zeichenbasiert bei ~0,71 - ohne strenge Schwelle wuerde eine
+# unlesbare Spalte auf eine falsche Nachbarspalte gemappt. Echte Treffer sind
+# entweder identisch oder Teilstring einer Alias-Bezeichnung (>= 0,85).
+MATCH_THRESHOLD = 0.78
 
 
 @dataclass(frozen=True)
@@ -234,6 +238,27 @@ def match_columns(headers: list[ColumnHeader], profile: Profile) -> list[ColumnH
             header.column_key = None
             header.match_score = 0.0
     return headers
+
+
+def enrich_columns(headers: list[ColumnHeader], profile: Profile) -> None:
+    """Ergaenzt fehlende Angaben aus dem Profil.
+
+    Die geometrischen Extraktoren lesen zwar Adresse und Bezeichnung, aber
+    nicht immer die Gruppenzeilen. Gruppe/Untergruppe/Kuerzel kommen dann aus
+    dem Profil - das haelt die Aggregation ueber alle Dateien einheitlich.
+    """
+    for header in headers:
+        if not header.column_key:
+            continue
+        column = profile.column(header.column_key)
+        if column is None:
+            continue
+        header.group = header.group or column.group
+        header.subgroup = header.subgroup or column.subgroup
+        header.abbrev = header.abbrev or column.abbrev
+        header.label = header.label or column.label
+        if not header.footnote_markers and column.footnotes:
+            header.footnote_markers = list(column.footnotes)
 
 
 def assign_footnotes(headers: list[ColumnHeader], footnotes: list) -> None:

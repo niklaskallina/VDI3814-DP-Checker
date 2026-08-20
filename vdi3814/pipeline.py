@@ -19,6 +19,7 @@ from typing import Callable, Iterable
 
 from .config import SETTINGS
 from .extract import extract_excel, extract_pdf_text, is_excel, pdf_has_text_layer
+from .extract.pdftext_extractor import classify_page_text
 from .extract.base import ExtractionMode, RawTable
 from .extract.vision_extractor import classify_page, extract_vision
 from .ingest.loader import SUPPORTED_SUFFIXES, file_hash, load_pages
@@ -34,7 +35,7 @@ from .models import (
     PageResult,
     SumCheck,
 )
-from .profiles_loader import Profile, assign_footnotes, detect_profile, match_columns
+from .profiles_loader import Profile, assign_footnotes, detect_profile, enrich_columns, match_columns
 from .vision import ocr
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def _merge_tables(tables: list[RawTable], profile: Profile | None) -> tuple[
     for table in tables:
         if profile is not None:
             match_columns(table.columns, profile)
+            enrich_columns(table.columns, profile)
         mapping: dict[int, int] = {}
         for column in table.columns:
             identity = _column_identity(column)
@@ -164,7 +166,21 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
                                                                       "Abschnitt-/Spalte-Raster in der Textebene")))
             continue
 
-        # Keine verwertbare Textebene -> Bild rendern und Modell fragen
+        # Kein Tabellenraster gefunden: erst ohne Modell klassifizieren.
+        # Ein sicher erkanntes Regelschema muss gar nicht erst gerendert werden.
+        if text_layer:
+            kind_name, confidence, reason = classify_page_text(path, page_index)
+            if kind_name in ("regelschema", "sonstiges") and confidence >= 0.7:
+                progress(f"{path.name} Seite {page_index + 1}: uebersprungen ({kind_name})")
+                pages.append(PageResult(
+                    page_index=page_index,
+                    classification=PageClassification(
+                        PageKind.SCHEMA if kind_name == "regelschema" else PageKind.SONSTIGES,
+                        confidence, reason),
+                ))
+                continue
+
+        # Sonst Bild rendern und das Vision-Modell fragen
         page_image = None
         for candidate in load_pages(path, settings.render_dpi):
             if candidate.page_index == page_index:
