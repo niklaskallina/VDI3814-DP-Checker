@@ -9,6 +9,8 @@ erkannt und wahlweise ersetzt.
 from __future__ import annotations
 
 import json
+import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -42,8 +44,26 @@ from .models import (
 )
 
 
+log = logging.getLogger(__name__)
+
+
 class Base(DeclarativeBase):
     pass
+
+
+def _bbox_to_text(bbox) -> str:
+    return ",".join(f"{value:.2f}" for value in bbox) if bbox else ""
+
+
+def bbox_from_text(text: str) -> tuple[float, float, float, float] | None:
+    """Fundstelle aus der Datenbank zurueckwandeln."""
+    if not text:
+        return None
+    try:
+        werte = [float(part) for part in text.split(",")]
+    except ValueError:
+        return None
+    return tuple(werte) if len(werte) == 4 else None
 
 
 class Document(Base):
@@ -58,6 +78,7 @@ class Document(Base):
     fassung: Mapped[str] = mapped_column(String(16), default="")
     backend: Mapped[str] = mapped_column(String(32), default="")
     warnings_json: Mapped[str] = mapped_column(Text, default="[]")
+    stored_path: Mapped[str] = mapped_column(Text, default="")   # Kopie der Originaldatei
 
     projekt: Mapped[str] = mapped_column(Text, default="")
     auftraggeber: Mapped[str] = mapped_column(Text, default="")
@@ -94,6 +115,8 @@ class Page(Base):
     kind: Mapped[str] = mapped_column(String(32), default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     reason: Mapped[str] = mapped_column(Text, default="")
+    width: Mapped[float] = mapped_column(Float, default=0.0)
+    height: Mapped[float] = mapped_column(Float, default=0.0)
 
     document: Mapped[Document] = relationship(back_populates="pages")
 
@@ -130,6 +153,7 @@ class Row(Base):
     remark: Mapped[str] = mapped_column(Text, default="")
     kind: Mapped[str] = mapped_column(String(16), default="daten", index=True)
     exclusion_reason: Mapped[str] = mapped_column(Text, default="")
+    bbox: Mapped[str] = mapped_column(String(64), default="")   # Fundstelle "x0,y0,x1,y1"
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
 
     @property
@@ -150,6 +174,7 @@ class Value(Base):
     count: Mapped[float | None] = mapped_column(Float, nullable=True)
     raw_value: Mapped[str] = mapped_column(Text, default="")
     note: Mapped[str] = mapped_column(Text, default="")
+    bbox: Mapped[str] = mapped_column(String(64), default="")   # Fundstelle "x0,y0,x1,y1"
 
     row: Mapped[Row] = relationship(back_populates="values")
 
@@ -306,6 +331,7 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             remark=row.remark,
             kind=row.kind.value,
             exclusion_reason=row.exclusion_reason,
+            bbox=_bbox_to_text(row.bbox),
             confidence=row.confidence,
         )
         session.add(db_row)
@@ -318,6 +344,7 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
                 count=cell.count,
                 raw_value=cell.raw_value,
                 note=cell.note,
+                bbox=_bbox_to_text(cell.bbox),
             ))
 
     for page in result.pages:
@@ -327,6 +354,8 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             kind=page.classification.kind.value,
             confidence=page.classification.confidence,
             reason=page.classification.reason,
+            width=page.width,
+            height=page.height,
         ))
 
     for footnote in result.footnotes:
@@ -337,8 +366,39 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             referenced_columns=",".join(footnote.referenced_columns),
         ))
 
+    _store_source(session, document, result)
     session.commit()
     return document
+
+
+def source_directory(session: Session) -> Path | None:
+    """Ablageordner fuer Originaldateien neben der Datenbankdatei."""
+    bind = session.get_bind()
+    database = getattr(getattr(bind, "url", None), "database", None)
+    if not database:
+        return None
+    return Path(database).parent / "quellen"
+
+
+def _store_source(session: Session, document: Document, result: DocumentResult) -> None:
+    """Legt eine Kopie der Originaldatei im Projekt ab.
+
+    Nur so laesst sich spaeter im Programm zeigen, an welcher Stelle im PDF ein
+    Wert gefunden wurde - auch wenn die Ursprungsdatei verschoben wurde.
+    """
+    quelle = Path(result.source_path)
+    ziel_ordner = source_directory(session)
+    if ziel_ordner is None or not quelle.is_file():
+        return
+    ziel_ordner.mkdir(parents=True, exist_ok=True)
+    ziel = ziel_ordner / f"{result.file_hash[:16]}{quelle.suffix.lower()}"
+    if not ziel.exists():
+        try:
+            shutil.copy2(quelle, ziel)
+        except OSError as exc:              # pragma: no cover - Rechteproblem
+            log.warning("Originaldatei konnte nicht abgelegt werden: %s", exc)
+            return
+    document.stored_path = str(ziel)
 
 
 def list_documents(session: Session) -> list[Document]:
@@ -397,7 +457,9 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
             kind=RowKind(row.kind) if row.kind else RowKind.DATEN,
             exclusion_reason=row.exclusion_reason,
             confidence=row.confidence,
-            cells=[Cell(column_index=v.column_idx, raw_value=v.raw_value, count=v.count, note=v.note)
+            bbox=bbox_from_text(row.bbox),
+            cells=[Cell(column_index=v.column_idx, raw_value=v.raw_value, count=v.count,
+                        note=v.note, bbox=bbox_from_text(v.bbox))
                    for v in row.values],
         )
         for row in document.rows
@@ -405,7 +467,8 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
     result.pages = [
         PageResult(page_index=page.page_index,
                    classification=PageClassification(PageKind(page.kind) if page.kind else PageKind.SONSTIGES,
-                                                     page.confidence, page.reason))
+                                                     page.confidence, page.reason),
+                   width=page.width, height=page.height)
         for page in document.pages
     ]
     result.footnotes = [

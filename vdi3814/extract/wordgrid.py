@@ -217,6 +217,14 @@ def _build_grid(words: list[Word], page_width: float, used: set[int]) -> _Header
 
 
 
+def _bbox(words: list[Word]) -> tuple[float, float, float, float] | None:
+    """Umschliessendes Rechteck einer Wortgruppe - die spaetere Fundstelle."""
+    if not words:
+        return None
+    return (min(w[0] for w in words), min(w[1] for w in words),
+            max(w[2] for w in words), max(w[3] for w in words))
+
+
 def _row_pitch(clusters: list[list[Word]]) -> float:
     """Misst den Zeilenabstand der Seite (Median der Abstaende der Zeilenmitten).
 
@@ -424,7 +432,8 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
             raw = " ".join(w[4] for w in hits).strip()
             count = parse_count(raw)
             cells.append(Cell(column_index=column.index, raw_value=raw, count=count,
-                              note="" if count is not None else raw))
+                              note="" if count is not None else raw,
+                              bbox=_bbox(hits)))
 
         remark = ""
         if grid.note_left is not None:
@@ -466,6 +475,7 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
                 remark=remark,
                 cells=cells,
                 page_index=page_index,
+                bbox=_bbox(cluster),
                 kind=kind,
                 exclusion_reason=reason,
                 confidence=1.0,

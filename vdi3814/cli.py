@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from . import aggregate, db, export_excel
+from . import aggregate, db, evidence, export_excel, projects
 from .config import SETTINGS
 from .costs import price_template
 from .ingest.loader import collect_files
@@ -23,6 +23,14 @@ from .pipeline import process_files
 from .profiles_loader import load_profiles
 from .vision import ocr
 from .vision.ollama_client import OllamaUnavailable, OllamaVisionBackend
+
+
+def _engine(args):
+    """Datenbank des gewaehlten Projekts (oder ein direkt angegebener Pfad)."""
+    if getattr(args, "db", None):
+        return db.make_engine(args.db)
+    projekt = projects.resolve(getattr(args, "projekt", None))
+    return db.make_engine(projekt.db_path)
 
 
 def _backend(args):
@@ -100,7 +108,7 @@ def cmd_import(args) -> int:
     backend = _backend(args)
     results = process_files(files, backend=backend, progress=lambda m: print("  ", m))
 
-    engine = db.make_engine(args.db)
+    engine = _engine(args)
     saved = 0
     with Session(engine) as session:
         for result in results:
@@ -113,12 +121,13 @@ def cmd_import(args) -> int:
                 db.save_document(session, result)
                 saved += 1
     if not args.nur_pruefen:
-        print(f"{saved} Datei(en) in {args.db or SETTINGS.db_path} gespeichert.")
+        ziel = args.db or projects.resolve(getattr(args, "projekt", None)).db_path
+        print(f"{saved} Datei(en) gespeichert in {ziel}")
     return 0
 
 
 def cmd_list(args) -> int:
-    engine = db.make_engine(args.db)
+    engine = _engine(args)
     with Session(engine) as session:
         frame = aggregate.documents_frame(session)
     if frame.empty:
@@ -130,7 +139,7 @@ def cmd_list(args) -> int:
 
 
 def cmd_prices(args) -> int:
-    engine = db.make_engine(args.db)
+    engine = _engine(args)
     with Session(engine) as session:
         if args.setzen:
             updates = {}
@@ -157,7 +166,7 @@ def cmd_prices(args) -> int:
 
 
 def cmd_export(args) -> int:
-    engine = db.make_engine(args.db)
+    engine = _engine(args)
     with Session(engine) as session:
         raw = aggregate.raw_dataframe(session)
         if raw.empty:
@@ -179,6 +188,53 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_projects(args) -> int:
+    if args.neu:
+        projekt = projects.create(args.neu)
+        print(f"Projekt angelegt: {projekt.name} ({projekt.path})")
+    if args.loeschen:
+        if projects.delete(args.loeschen):
+            print(f"Projekt geloescht: {args.loeschen}")
+        else:
+            print(f"Projekt nicht gefunden: {args.loeschen}", file=sys.stderr)
+            return 1
+    if args.leeren:
+        if projects.clear(args.leeren):
+            print(f"Projekt geleert: {args.leeren}")
+        else:
+            print(f"Projekt nicht gefunden: {args.leeren}", file=sys.stderr)
+            return 1
+    for projekt in projects.list_projects():
+        stand = projekt.changed_at.strftime("%d.%m.%Y %H:%M") if projekt.changed_at else "-"
+        print(f"  {projekt.name:30s} {projekt.size_mb:8.2f} MB   {stand}   {projekt.path}")
+    return 0
+
+
+def cmd_delete(args) -> int:
+    engine = _engine(args)
+    with Session(engine) as session:
+        for dokument_id in args.ids:
+            db.delete_document(session, int(dokument_id))
+    print(f"{len(args.ids)} Datei(en) aus der Datenbank entfernt.")
+    return 0
+
+
+def cmd_check_data(args) -> int:
+    """Pruefbericht: Abweichungen und nicht gezaehlte Zeilen."""
+    engine = _engine(args)
+    with Session(engine) as session:
+        befunde = evidence.all_findings(session)
+    if not befunde:
+        print("Keine Befunde - die Zaehlung deckt sich mit den Listen.")
+        return 0
+    for befund in befunde:
+        werte = ", ".join(f"{k}: {v:g}" for k, v in befund.werte.items())
+        print(f"[{befund.art:14s}] {befund.datei} S.{befund.anzeige_seite}: {befund.titel}"
+              + (f"  ({werte})" if werte else ""))
+    print(f"\n{len(befunde)} Befund(e). Details mit Seitenansicht in der Oberflaeche.")
+    return 0
+
+
 def cmd_profiles(args) -> int:
     for profile in load_profiles():
         print(f"{profile.id}  ({profile.fassung})  {profile.name}")
@@ -192,7 +248,8 @@ def cmd_profiles(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vdi3814", description="VDI 3814 DP-Checker")
-    parser.add_argument("--db", help="Pfad zur SQLite-Datenbank", default=None)
+    parser.add_argument("--projekt", help="Projektname (eigene Datenbank je Projekt)", default=None)
+    parser.add_argument("--db", help="Pfad zur SQLite-Datenbank (statt --projekt)", default=None)
     sub = parser.add_subparsers(dest="befehl", required=True)
 
     check = sub.add_parser("check", help="Installation und Modellverfuegbarkeit pruefen")
@@ -223,6 +280,19 @@ def build_parser() -> argparse.ArgumentParser:
     export = sub.add_parser("export", help="Excel-Auswertung schreiben")
     export.add_argument("datei", help="Zieldatei (.xlsx)")
     export.set_defaults(func=cmd_export)
+
+    projekte = sub.add_parser("projekt", help="Projekte anlegen, leeren, loeschen, anzeigen")
+    projekte.add_argument("--neu", help="neues Projekt anlegen")
+    projekte.add_argument("--leeren", help="Daten eines Projekts entfernen, Projekt behalten")
+    projekte.add_argument("--loeschen", help="Projekt samt Daten entfernen")
+    projekte.set_defaults(func=cmd_projects)
+
+    entfernen = sub.add_parser("entfernen", help="einzelne Dateien aus der Datenbank loeschen")
+    entfernen.add_argument("ids", nargs="+", help="Dokument-IDs (siehe 'list')")
+    entfernen.set_defaults(func=cmd_delete)
+
+    pruefen = sub.add_parser("pruefen", help="Abweichungen und nicht gezaehlte Zeilen auflisten")
+    pruefen.set_defaults(func=cmd_check_data)
 
     profiles = sub.add_parser("profile", help="hinterlegte Spalten-Profile anzeigen")
     profiles.add_argument("--ausfuehrlich", action="store_true")

@@ -97,7 +97,8 @@ def _merge_tables(tables: list[RawTable], profile: Profile | None) -> tuple[
         for row in table.rows:
             row.cells = [
                 Cell(column_index=mapping.get(cell.column_index, cell.column_index),
-                     raw_value=cell.raw_value, count=cell.count, note=cell.note)
+                     raw_value=cell.raw_value, count=cell.count, note=cell.note,
+                     bbox=cell.bbox)      # Fundstelle mitnehmen, sie ist der Nachweis
                 for cell in row.cells
                 if cell.column_index in mapping
             ]
@@ -151,6 +152,7 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
 
     with pymupdf.open(path) as doc:
         page_count = doc.page_count
+        seitengroessen = [(page.rect.width, page.rect.height) for page in doc]
 
     for page_index in range(page_count):
         table = None
@@ -162,9 +164,13 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
         if table is not None:
             progress(f"{path.name} Seite {page_index + 1}: Tabelle ueber PDF-Textebene gelesen")
             tables.append(table)
-            pages.append(PageResult(page_index=page_index,
-                                    classification=PageClassification(PageKind.FUNKTIONSLISTE, 1.0,
-                                                                      "Abschnitt-/Spalte-Raster in der Textebene")))
+            breite, hoehe = seitengroessen[page_index]
+            pages.append(PageResult(
+                page_index=page_index,
+                classification=PageClassification(PageKind.FUNKTIONSLISTE, 1.0,
+                                                  "Abschnitt-/Spalte-Raster in der Textebene"),
+                width=breite, height=hoehe,
+            ))
             continue
 
         # Kein Tabellenraster gefunden: erst ohne Modell klassifizieren.
@@ -194,6 +200,7 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
             continue
         table, page = _process_image(page_image, page_index, backend, settings, progress,
                                      label=f"{path.name} Seite {page_index + 1}")
+        page.width, page.height = seitengroessen[page_index]
         pages.append(page)
         if table is not None:
             tables.append(table)

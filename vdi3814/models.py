@@ -93,6 +93,7 @@ class Cell:
     raw_value: str = ""
     count: float | None = None
     note: str = ""
+    bbox: tuple[float, float, float, float] | None = None   # Fundstelle auf der Seite
 
     @property
     def is_note(self) -> bool:
@@ -110,6 +111,7 @@ class DataPointRow:
     remark: str = ""
     cells: list[Cell] = field(default_factory=list)
     page_index: int = 0
+    bbox: tuple[float, float, float, float] | None = None    # Fundstelle der Zeile
     kind: RowKind = RowKind.DATEN
     exclusion_reason: str = ""
     confidence: float = 0.0
@@ -176,6 +178,8 @@ class PageResult:
     page_index: int
     classification: PageClassification
     image_path: str = ""
+    width: float = 0.0        # Seitenbreite in Quellkoordinaten (fuer den Nachweis)
+    height: float = 0.0
     error: str = ""
     rows: list[DataPointRow] = field(default_factory=list)
 
