@@ -37,6 +37,12 @@ datas += collect_data_files("altair")
 
 # Eigene Dateien: Spaltenprofile, die als Skript ausgefuehrte Oberflaeche,
 # Beispieldaten und Dokumentation
+# Mitgelieferte Texterkennung (wird im CI-Lauf bereitgestellt), damit
+# gescannte Listen ohne Fremdinstallation gelesen werden koennen.
+import os
+if os.path.isdir("tesseract"):
+    datas += [("tesseract", "tesseract")]
+
 datas += [
     ("vdi3814/profiles", "vdi3814/profiles"),
     ("vdi3814/ui/app.py", "vdi3814/ui"),

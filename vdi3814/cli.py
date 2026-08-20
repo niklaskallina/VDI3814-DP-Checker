@@ -16,7 +16,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from . import aggregate, db, evidence, export_excel, projects
-from .config import SETTINGS
+from .config import SETTINGS, bundled_tesseract
 from .costs import price_template
 from .ingest.loader import collect_files
 from .pipeline import process_files
@@ -48,20 +48,31 @@ def _backend(args):
 
 
 def cmd_check(args) -> int:
-    print("Konfiguration")
-    print(f"  Datenbank        : {SETTINGS.db_path}")
+    print("VDI 3814 DP-Checker - Einrichtung")
+    print()
+    print("Ohne Zusatzsoftware auswertbar:")
+    print("  Excel-Vorlagen (.xlsx/.xls)          : ja")
+    print("  PDF mit Textebene (aus Excel/CAD)    : ja")
+    print(f"  Gescannte Listen und Bilder          : "
+          f"{'ja' if ocr.available() else 'NEIN - Texterkennung fehlt'}")
+    print()
+    print("Einzelheiten")
+    print(f"  Projektordner    : {projects.projects_root()}")
     print(f"  Profile          : {', '.join(p.id for p in load_profiles())}")
-    print(f"  Ollama-Host      : {SETTINGS.ollama_host}")
-    print(f"  Vision-Modell    : {SETTINGS.vision_model}")
+    tesseract = bundled_tesseract()
+    print(f"  Tesseract-OCR    : {'ja' if ocr.available() else 'nein'}"
+          + (f" (mitgeliefert: {tesseract})" if tesseract else ""))
+    if ocr.available():
+        print(f"  OCR-Sprachen     : {', '.join(ocr.sprachen()) or 'unbekannt'}")
+    print()
+    print("Optional (nur fuer besonders schlechte Scans):")
     backend = OllamaVisionBackend()
     try:
         models = backend.list_models()
-        ready = backend.available()
-        print(f"  Ollama erreichbar: ja ({len(models)} Modelle installiert)")
-        print(f"  Modell vorhanden : {'ja' if ready else 'NEIN - bitte `ollama pull ' + SETTINGS.vision_model + '`'}")
-    except OllamaUnavailable as exc:
-        print(f"  Ollama erreichbar: NEIN ({exc})")
-    print(f"  Tesseract-OCR    : {'ja' if ocr.available() else 'nein (optional)'}")
+        print(f"  Lokales Vision-Modell: Ollama erreichbar ({len(models)} Modelle), "
+              f"{SETTINGS.vision_model} {'vorhanden' if backend.available() else 'fehlt'}")
+    except OllamaUnavailable:
+        print("  Lokales Vision-Modell: nicht eingerichtet (wird nicht benoetigt)")
     return 0
 
 

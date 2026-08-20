@@ -1,0 +1,8 @@
+Diese Anwendung enthaelt Tesseract OCR (https://github.com/tesseract-ocr/tesseract)
+sowie die Sprachdaten aus tessdata_fast.
+
+Tesseract OCR steht unter der Apache License 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+
+Die Weitergabe im Rahmen dieser Anwendung erfolgt unveraendert und unter
+Beibehaltung dieses Lizenzhinweises.

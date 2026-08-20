@@ -1,12 +1,42 @@
 # VDI 3814 DP-Checker
 
-Auswertung von **GA-Funktionslisten nach VDI 3814 Blatt 1** (alte und neue Fassung) –
-Batch-Import vieler Dateien, automatische Spalten- und Zeilenerkennung, editierbare
-Vorschau, projektübergreifende Aggregation, Kostenschätzung und Excel-Export.
+Datenpunkte aus **GA-Funktionslisten nach VDI 3814** (alte und neue Fassung) automatisch
+auszählen – für Kalkulation und Mengenermittlung. Viele Listen auf einmal einlesen,
+Ergebnis nachvollziehbar prüfen, nach Projekten getrennt speichern, mit Einheitspreisen
+bewerten und als Excel-Datei ausgeben.
 
-**Vollständig offline.** Es wird keine Cloud-KI und keine externe Schnittstelle
-verwendet; die Mustererkennung läuft über ein lokal installiertes
-Vision-Language-Modell (Ollama auf `127.0.0.1`). Projektdaten verlassen das Gerät nicht.
+**Ohne Zusatzsoftware und ohne KI-Dienst.** Alles läuft auf dem eigenen Rechner:
+Excel-Vorlagen und PDFs werden geometrisch ausgewertet, gescannte Listen mit der
+mitgelieferten Texterkennung. Projektdaten verlassen das Gerät nicht.
+
+---
+
+## Für Anwender: installieren und loslegen
+
+1. `VDI3814-DP-Checker-Setup.exe` aus dem [Release](../../releases/latest) herunterladen
+2. Doppelklick – das Setup installiert alles in einem Schritt (keine Administratorrechte nötig)
+3. Programm über das Startmenü starten; die Oberfläche öffnet sich im Browser und
+   läuft ausschließlich lokal
+
+Es muss **nichts weiter installiert** werden – weder Python noch Texterkennung noch
+ein KI-Modell. Wer nichts installieren möchte, nimmt stattdessen die ZIP-Datei,
+entpackt sie und startet `VDI3814-DP-Checker.exe`.
+
+### Der Ablauf in der Oberfläche
+
+| Reiter | Wozu |
+|---|---|
+| **1 Import** | Dateien auswählen (mehrere gleichzeitig) und einlesen |
+| **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, speichern |
+| **3 Nachweis & Differenzen** | Jeden Befund anklicken – die Originalseite wird an der betreffenden Stelle markiert angezeigt |
+| **4 Gesamtübersicht** | Summen über alle Listen, nach Projekt/Anlage/Gewerk aufschlüsselbar |
+| **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit |
+| **6 Export** | Excel-Datei mit Funktionsliste, Summen, Kostenblatt und Rohdaten |
+| **7 Projekt & Daten** | Projekte anlegen/löschen, einzelne Dateien aus der Datenbank entfernen |
+
+Jedes **Projekt** hat eine eigene Datenbank und einen eigenen Ablageordner – Auswertungen
+verschiedener Bauvorhaben vermischen sich also nicht. Projekte lassen sich jederzeit
+anlegen, leeren oder vollständig löschen, ebenso einzelne importierte Dateien.
 
 ---
 
@@ -14,194 +44,92 @@ Vision-Language-Modell (Ollama auf `127.0.0.1`). Projektdaten verlassen das Ger�
 
 | Anforderung | Umsetzung |
 |---|---|
-| Batch-Import | beliebig viele PDF/PNG/JPEG/TIFF **und** die Excel-Vorlagen (`.xlsx`, `.xls`), gemischt |
-| Mehrseitige, gescannte PDFs | ja – jede Seite wird einzeln klassifiziert und verarbeitet |
-| Alte **und** neue Fassung | automatische Erkennung anhand der gelesenen Kopfstruktur, keine Abfrage nötig |
-| Regelschemata in derselben Datei | werden erkannt, übersprungen und **protokolliert** (Blatt „Dokumente“ im Export) |
-| Spalten-/Zeilenerkennung | über das normative Adressschema `Abschnitt.Spalte`, nicht über feste Pixelpositionen |
-| Fußnoten (Zählregeln) | werden ausgelesen, der referenzierten Spalte zugeordnet und exportiert |
-| Freitext in Zellen | wird als Anmerkung geführt und **nie** als Zählwert addiert |
-| Summenzeile | wird nicht übernommen, sondern gegen die eigene Aufsummierung geprüft |
-| Vorschau & Korrektur | editierbare Tabelle je Datei, erst danach Speichern/Export |
-| Persistenz | lokale SQLite-Datenbank, inkrementell erweiterbar, Re-Export ohne erneute Erkennung |
-| Kostenschätzung | Einheitspreis je Funktionsspalte, jederzeit änderbar, sofortige Neuberechnung |
-| Excel-Export | `.xlsx` mit Übersicht, Kostenschätzung (**mit Formeln**), Rohdaten, Dokumente, Fußnoten, Projekte |
+| Batch-Import | beliebig viele PDF/PNG/JPEG/TIFF **und** die Excel-Vorlagen (.xlsx/.xls), gemischt |
+| Mehrseitige und gescannte PDFs | ja – jede Seite wird einzeln klassifiziert und verarbeitet |
+| Alte **und** neue Fassung | automatische Erkennung, keine Abfrage nötig |
+| Regelschemata in derselben Datei | werden erkannt, übersprungen und protokolliert |
+| Summen-, Zwischensummen- und **Übertragszeilen** | werden erkannt und **nie mitgezählt**, bleiben aber zur Kontrolle sichtbar |
+| Leerzeilen und Fußbereich | zählen nicht mit; der Datenbereich wird aus den Tabellenlinien hart begrenzt |
+| Freitext in Zellen | wird als Anmerkung geführt, nie als Zahl addiert |
+| Kontrolle | die eigene Summe wird gegen die Zeile „Summe Funktionen" der Liste geprüft |
+| **Nachweis** | zu jedem Wert und jeder Abweichung zeigt das Programm die markierte Fundstelle im Original |
+| Vorschau & Korrektur | editierbare Tabelle je Datei, erst danach speichern |
+| Projekte | getrennte Datenbanken, jederzeit löschbar |
+| Kostenschätzung | Einheitspreis je Funktionsspalte, sofortige Neuberechnung |
+| Excel-Export | Funktionsliste im Original-Layout, Summen, Kostenblatt **mit Formeln**, Rohdaten, Dokumente, Fußnoten |
 
 ---
 
-## Drei Erkennungswege – automatisch gewählt
+## Wie die Erkennung arbeitet
 
-Das Tool nimmt je Datei/Seite den genauesten verfügbaren Weg:
+Das Tool nimmt je Datei den genauesten verfügbaren Weg:
 
 | Quelle | Verfahren | Genauigkeit |
 |---|---|---|
 | `.xlsx` / `.xls` | direktes Auslesen der Zellen | exakt |
-| PDF **mit Textebene** (aus Excel/CAD gedruckt) | Rekonstruktion des Rasters aus den Wortkoordinaten | exakt |
-| Scan, Foto, PNG/JPEG, bildbasiertes PDF | lokales Vision-Language-Modell + optionales OCR | modellabhängig, in der Vorschau korrigierbar |
+| PDF **mit Textebene** (aus Excel/CAD gedruckt) | Tabellenraster aus den Wortkoordinaten | exakt |
+| Scan, Foto, PNG/JPEG, bildbasiertes PDF | Tabellenraster aus den Linien, dann Zelle-für-Zelle-Texterkennung | sehr hoch, wird gegen die Summenzeile geprüft |
 
-Der Anker ist in allen Fällen derselbe: die beiden Kopfzeilen **„Abschnitt“** und
-**„Spalte“**, die in beiden VDI-Vorlagen enthalten sind. Aus ihnen ergibt sich für jede
-Funktionsspalte eine eindeutige Adresse (z. B. `6.13` = *Tarifabhängiges Schalten* in
-der alten, `2.2.10` = *Frostschutzsteuerung* in der neuen Fassung). Diese Adresse ist
-robuster als die senkrecht gedruckten Spaltenüberschriften; die Bezeichnungstexte
-dienen nur als Rückfallebene.
+Anker ist in allen Fällen das Kopfzeilenpaar **„Abschnitt"** und **„Spalte"**, das beide
+VDI-Vorlagen enthalten. Daraus ergibt sich für jede Funktionsspalte eine eindeutige
+Adresse (z. B. `6.13` = *Tarifabhängiges Schalten* in der alten, `2.2.10` =
+*Frostschutzsteuerung* in der neuen Fassung).
+
+Bei Scans, in denen die winzigen Kopfziffern nicht sicher lesbar sind, wird die Fassung
+zusätzlich über den **Fingerabdruck der Vorlage** bestimmt – die Größen der
+Abschnittsblöcke (alte Fassung 5-5-6-5-8-13-4-4, neue Fassung 1-4-2-5-2-12-9-5-4-5-1-6).
+Passt der Fingerabdruck nicht, wird bewusst nichts geraten, sondern gemeldet.
+
+Es werden **keine festen Positionen** verwendet: Spaltenmitten, Tabellenober- und
+-unterkante sowie alle Toleranzen werden für jede Seite neu gemessen.
+
+> Für besonders schlechte Scans lässt sich zusätzlich ein lokales Vision-Modell
+> (Ollama) einschalten. Das ist optional und für den normalen Betrieb nicht nötig.
 
 ---
 
-## Installation (Windows)
-
-### Variante A – fertige EXE (keine Python-Installation nötig)
-
-1. **Herunterladen**
-   * Fertige Version: unter [Releases](../../releases) die Datei
-     `VDI3814-DP-Checker-windows.zip` laden.
-   * Immer aktueller Stand: Reiter **Actions** → letzter Lauf von
-     „Windows-EXE bauen" → Abschnitt *Artifacts* → `VDI3814-DP-Checker-windows`.
-2. **ZIP vollständig entpacken** (nicht aus dem ZIP heraus starten).
-3. **`VDI3814-DP-Checker.exe` starten** – die Oberfläche öffnet sich im Browser
-   unter `http://127.0.0.1:8501`. Das Konsolenfenster bitte geöffnet lassen.
-
-Dieselbe EXE arbeitet mit Argumenten als Kommandozeile:
+## Start aus dem Quellcode (für Entwicklung)
 
 ```bat
-VDI3814-DP-Checker.exe check
-VDI3814-DP-Checker.exe import C:\Projekte\Listen
-VDI3814-DP-Checker.exe export Auswertung.xlsx
-```
-
-Datenbank (`data\`) und Exporte (`out\`) legt das Programm **neben der EXE** an –
-der Ordner ist damit portabel, z. B. auf einem USB-Stick oder Netzlaufwerk.
-
-> Windows-SmartScreen meldet bei nicht signierten Programmen „Computer geschützt".
-> Über *Weitere Informationen → Trotzdem ausführen* startet die Anwendung. Wenn eine
-> Signatur gewünscht ist: Zertifikat als GitHub-Secret hinterlegen, dann kann der
-> Workflow zusätzlich `signtool` aufrufen.
-
-Für gescannte Listen und Fotos wird zusätzlich Ollama benötigt (Schritt 2 unten).
-Excel-Dateien und PDFs mit Textebene funktionieren ohne Ollama.
-
-**Neue Version veröffentlichen:** Tag setzen, der Rest passiert automatisch.
-
-```bat
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-### Variante B – aus dem Quellcode
-
-#### 1. Python
-
-Python 3.10 oder neuer von [python.org](https://www.python.org/downloads/windows/)
-installieren (bei der Installation **„Add python.exe to PATH“** anhaken).
-
-```bat
-cd C:\Pfad\zu\VDI3814-DP-Checker
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-```
 
-#### 2. Ollama + Vision-Modell (für Scans und Bilder)
-
-Nur nötig, wenn gescannte PDFs, Fotos oder PNG/JPEG ausgewertet werden sollen.
-Für Excel-Dateien und Text-PDFs läuft das Tool auch ohne.
-
-1. Ollama von [ollama.com/download](https://ollama.com/download) installieren.
-2. Einmalig – **hierfür wird Internet gebraucht, danach nie wieder**:
-
-```bat
-ollama pull qwen2.5vl:7b
-```
-
-`qwen2.5-VL` ist derzeit das offline verfügbare Modell mit dem besten
-Dokument-/Tabellenverständnis in dieser Größenklasse. Alternativen, die sich mit
-`--modell` bzw. über die Oberfläche einstellen lassen:
-
-| Modell | RAM/VRAM | Hinweis |
-|---|---|---|
-| `qwen2.5vl:7b` | ~8 GB | Voreinstellung, bestes Tabellenverständnis |
-| `qwen2.5vl:3b` | ~4 GB | für schwächere Rechner |
-| `llama3.2-vision:11b` | ~10 GB | Alternative, etwas schwächer bei dichten Tabellen |
-| `minicpm-v` | ~6 GB | kompakt, gute OCR-Eigenschaften |
-
-Ollama läuft als lokaler Dienst auf `http://127.0.0.1:11434`. Prüfen:
-
-```bat
-python -m vdi3814.cli check
-```
-
-#### 3. Tesseract-OCR (optional)
-
-Verbessert die Fassungserkennung bei schlechten Scans.
-[UB-Mannheim-Installer](https://github.com/UB-Mannheim/tesseract/wiki) inkl.
-deutschem Sprachpaket installieren; falls nicht im PATH:
-
-```bat
-set VDI_TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
-```
-
----
-
-## Start
-
-### Oberfläche (empfohlen)
-
-```bat
-.venv\Scripts\activate
 streamlit run vdi3814\ui\app.py
 ```
 
-Der Browser öffnet `http://localhost:8501`. Die Oberfläche läuft rein lokal – der
-Browser ist nur die Anzeige, es geht nichts ins Netz.
+Für gescannte Listen wird dabei ein installiertes Tesseract benötigt
+([UB-Mannheim-Installer](https://github.com/UB-Mannheim/tesseract/wiki), Sprachpaket
+Deutsch). In der fertigen EXE ist es bereits enthalten.
 
-> **Warum Streamlit und keine Desktop-GUI?** Der Arbeitsablauf ist tabellarisch:
-> mehrere hundert Zeilen × 50–57 Spalten prüfen und korrigieren. `st.data_editor`
-> liefert dafür eine Excel-ähnliche Bearbeitung inklusive Filtern und Sortieren, die
-> mit Tkinter/Qt erst aufwendig nachgebaut werden müsste. Zusätzlich entfällt jede
-> GUI-Paketierung – ein `pip install` genügt. Wer ein echtes Fenster statt eines
-> Browser-Tabs möchte, startet Streamlit im App-Modus
-> (`streamlit run … --server.headless true` + Browser-Verknüpfung) oder nutzt die CLI.
+### Kommandozeile
 
-### Kommandozeile (Batch ohne Oberfläche)
+Dieselbe EXE arbeitet mit Argumenten als Kommandozeilenwerkzeug:
 
 ```bat
-python -m vdi3814.cli check                          :: Installation prüfen
-python -m vdi3814.cli selbsttest                     :: Oberfläche einmal durchlaufen lassen
-python -m vdi3814.cli import C:\Projekte\Listen      :: Ordner importieren
-python -m vdi3814.cli import liste.pdf --nur-pruefen :: nur erkennen, nichts speichern
-python -m vdi3814.cli list                           :: importierte Dateien anzeigen
-python -m vdi3814.cli preise --setzen A_1_1=45 A_1_5=80
-python -m vdi3814.cli preise --vorlage vdi3814_alt   :: Preisvorlage als CSV
-python -m vdi3814.cli preise --csv-import preise.csv
-python -m vdi3814.cli export Auswertung.xlsx
+VDI3814-DP-Checker.exe check                                :: Einrichtung prüfen
+VDI3814-DP-Checker.exe projekt --neu "Neubau Musterstadt"   :: Projekt anlegen
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" import C:\Listen
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" list
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" pruefen
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" entfernen 3
+VDI3814-DP-Checker.exe preise --setzen A_1_1=45 A_1_5=80
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" export Auswertung.xlsx
 ```
 
----
+Aus dem Quellcode entsprechend mit `python -m vdi3814.cli ...`.
 
-## Beispiel: kompletter Ablauf in 3 Minuten
-
-Der Beispieldatensatz enthält eine Liste der **alten** Fassung (mit einer zweiten
-Seite „Regelschema“, die übersprungen werden muss) und eine der **neuen** Fassung.
+### Beispiel: kompletter Ablauf
 
 ```bat
-python sample_data\make_samples.py            :: Beispieldateien erzeugen
-python -m vdi3814.cli import sample_data --kein-modell
-python -m vdi3814.cli preise --setzen A_1_5=80 A_1_1=45 N_1_1_1=75
-python -m vdi3814.cli export out\Auswertung.xlsx
+python sample_data\make_samples.py
+python -m vdi3814.cli --projekt Demo import sample_data
+python -m vdi3814.cli --projekt Demo preise --setzen A_1_5=80 A_1_1=45
+python -m vdi3814.cli --projekt Demo export Auswertung.xlsx
 ```
 
-Ausgabe des Imports:
-
-```
-   beispiel_alte_fassung.pdf Seite 1: Tabelle ueber PDF-Textebene gelesen
-   beispiel_alte_fassung.pdf Seite 2: uebersprungen (regelschema)
-   beispiel_neue_fassung.pdf Seite 1: Tabelle ueber PDF-Textebene gelesen
-   beispiel_alte_fassung.pdf: 8 Datenpunkte, Summe 31, Fassung alt
-   beispiel_neue_fassung.pdf: 8 Datenpunkte, Summe 30, Fassung neu
-```
-
-Denselben Ablauf gibt es in der Oberfläche über die Reiter
-**1 Import → 2 Vorschau & Korrektur → 3 Gesamtübersicht → 4 Kostenschätzung → 5 Export**.
+Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten Seite
+„Regelschema", die übersprungen werden muss) und eine der neuen Fassung.
 
 ---
 
@@ -251,7 +179,8 @@ Alle Einstellungen lassen sich über Umgebungsvariablen setzen (Präfix `VDI_`):
 
 | Variable | Voreinstellung | Bedeutung |
 |---|---|---|
-| `VDI_DB_PATH` | `data/vdi3814.sqlite3` | Pfad der Datenbank |
+| `VDI_DATA_DIR` | `data` | Ablage der Projekte (`data/projekte/<Name>/`) |
+| `VDI_DB_PATH` | `data/vdi3814.sqlite3` | einzelne Datenbank statt Projektordner |
 | `VDI_VISION_MODEL` | `qwen2.5vl:7b` | Ollama-Modell |
 | `VDI_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama-Adresse |
 | `VDI_RENDER_DPI` | `300` | Auflösung beim Rastern von PDF-Seiten |
@@ -270,8 +199,11 @@ Alle Einstellungen lassen sich über Umgebungsvariablen setzen (Präfix `VDI_`):
   und die Zuordnung kann in der Vorschau manuell nachgezogen werden.
 * Weicht die Zeile „Summe Funktionen“ von der eigenen Aufsummierung ab, wird die
   betroffene Spalte mit beiden Werten gemeldet.
-* Fehlt Ollama oder das Modell, arbeitet das Tool ohne Bilderkennung weiter
-  (Excel und Text-PDFs) und sagt das ausdrücklich.
+* Werte, die im Scan anders gelesen wurden als in der Liste, fallen über die Prüfung
+  gegen die Summenzeile auf und erscheinen im Reiter „Nachweis & Differenzen" mit
+  Seitenausschnitt.
+* Passt die erkannte Spaltenstruktur zu keiner hinterlegten Vorlage, wird das gemeldet,
+  statt Werte falsch zuzuordnen.
 
 ---
 
@@ -288,10 +220,13 @@ Projektstruktur:
 vdi3814/
   profiles/            Spalten-Profile beider Fassungen (YAML, erweiterbar)
   ingest/              Datei -> Seitenbild, Bildvorverarbeitung (Deskew, Kontrast)
-  extract/             Excel-, PDF-Textebenen- und Vision-Extraktion
-  vision/              Ollama-Client, Prompts, OCR, Test-Backend
+  extract/             Excel, PDF-Textebene, Scan-OCR; wordgrid.py = gemeinsamer Kern
+                       rowfilter.py = Summen-/Übertrags-/Leerzeilen-Erkennung
+  vision/              OCR-Anbindung; optionaler Ollama-Client
   ui/app.py            Streamlit-Oberfläche
   pipeline.py          Ablaufsteuerung inkl. Fassungserkennung und Summenprüfung
+  projects.py          Projektverwaltung (eigene Datenbank je Projekt)
+  evidence.py          Nachweis: Fundstellen im Original markieren
   db.py                SQLite/SQLAlchemy
   aggregate.py         Auswertung und Drilldown
   costs.py             Einheitspreise und Kosten

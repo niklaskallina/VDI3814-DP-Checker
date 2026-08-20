@@ -83,4 +83,24 @@ class Settings:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def bundled_tesseract() -> Path | None:
+    """Mitgeliefertes Tesseract finden (in der EXE oder neben dem Projekt).
+
+    Damit muss auf dem Zielrechner nichts zusaetzlich installiert werden:
+    das Programm bringt die Texterkennung fuer gescannte Listen selbst mit.
+    """
+    name = "tesseract.exe" if os.name == "nt" else "tesseract"
+    kandidaten = [APP_DIR.parent, PROJECT_DIR]
+    entpackt = getattr(sys, "_MEIPASS", None)
+    if entpackt:
+        kandidaten.insert(0, Path(entpackt))
+    if FROZEN:
+        kandidaten.insert(0, Path(sys.executable).resolve().parent)
+    for basis in kandidaten:
+        pfad = basis / "tesseract" / name
+        if pfad.is_file():
+            return pfad
+    return None
+
+
 SETTINGS = Settings()

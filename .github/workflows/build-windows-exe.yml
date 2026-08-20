@@ -43,6 +43,31 @@ jobs:
       - name: Beispieldaten erzeugen
         run: python sample_data/make_samples.py
 
+      - name: Texterkennung (Tesseract) beilegen
+        shell: pwsh
+        run: |
+          # Scans sollen ohne Fremdinstallation lesbar sein, deshalb wird
+          # Tesseract mit ausgeliefert (Apache License 2.0).
+          choco install tesseract --no-progress -y
+          $quelle = "C:\Program Files\Tesseract-OCR"
+          if (-not (Test-Path $quelle)) { throw "Tesseract wurde nicht gefunden" }
+          $ziel = "tesseract"
+          New-Item -ItemType Directory -Force -Path "$ziel/tessdata" | Out-Null
+          Copy-Item "$quelle/tesseract.exe" $ziel -Force
+          Copy-Item "$quelle/*.dll" $ziel -Force
+          foreach ($sprache in @("deu", "eng", "osd")) {
+            $datei = "$quelle/tessdata/$sprache.traineddata"
+            if (Test-Path $datei) {
+              Copy-Item $datei "$ziel/tessdata/" -Force
+            } else {
+              Invoke-WebRequest -UseBasicParsing `
+                "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$sprache.traineddata" `
+                -OutFile "$ziel/tessdata/$sprache.traineddata"
+            }
+          }
+          Copy-Item packaging/TESSERACT-LIZENZ.txt "$ziel/" -Force
+          Write-Host "Beigelegt: $((Get-ChildItem -Recurse $ziel | Measure-Object -Property Length -Sum).Sum / 1MB) MB"
+
       - name: EXE bauen
         run: pyinstaller vdi3814.spec --noconfirm
 
@@ -134,6 +159,23 @@ jobs:
           Remove-Item -Recurse -Force "dist/$env:APP_NAME/out" -ErrorAction SilentlyContinue
           Remove-Item -Force "dist/$env:APP_NAME/ui-out.log", "dist/$env:APP_NAME/ui-err.log" -ErrorAction SilentlyContinue
 
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $version = "1.0.$($env:GITHUB_RUN_NUMBER)"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DAppVersion=$version" packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer konnte nicht erstellt werden" }
+          Get-ChildItem Output
+
+      - name: Installer an den Lauf anhaengen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-Setup
+          path: Output/VDI3814-DP-Checker-Setup.exe
+          retention-days: 30
+
       - name: ZIP schnueren
         shell: pwsh
         run: |
@@ -151,14 +193,20 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.APP_NAME }}-windows.zip
+          files: |
+            Output/VDI3814-DP-Checker-Setup.exe
+            ${{ env.APP_NAME }}-windows.zip
           generate_release_notes: true
           body: |
             **VDI 3814 DP-Checker – Windows**
 
-            1. ZIP herunterladen und vollstaendig entpacken
-            2. `VDI3814-DP-Checker.exe` starten – die Oberflaeche oeffnet sich im Browser (rein lokal)
+            **Empfohlen:** `VDI3814-DP-Checker-Setup.exe` herunterladen und ausfuehren.
+            Das Setup installiert alles Noetige in einem Schritt – Python, Programm und
+            Texterkennung sind enthalten, Administratorrechte werden nicht benoetigt.
+            Danach startet das Programm ueber das Startmenue oder das Desktop-Symbol.
 
-            Fuer gescannte Listen zusaetzlich Ollama mit einem lokalen Vision-Modell
-            installieren (siehe README). Excel-Dateien und PDFs mit Textebene
-            funktionieren ohne Ollama.
+            Wer nichts installieren moechte, nimmt die ZIP-Datei: entpacken und
+            `VDI3814-DP-Checker.exe` starten.
+
+            Excel-Dateien, PDFs mit Textebene und gescannte Listen werden alle
+            ohne zusaetzliche Software ausgewertet.
