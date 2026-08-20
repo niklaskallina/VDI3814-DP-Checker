@@ -7,3 +7,6 @@ data/
 out/
 *.db
 *.sqlite3
+build/
+dist/
+*.zip

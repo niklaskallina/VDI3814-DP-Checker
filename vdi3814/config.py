@@ -7,6 +7,7 @@ damit auf dem Zielrechner nichts im Code angepasst werden muss.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,8 +30,15 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+FROZEN = getattr(sys, "frozen", False)
+
 APP_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = APP_DIR.parent
+
+# Als .exe liegen Datenbank, Exporte und Beispieldaten neben dem Programm
+# (portabel, kein Schreiben in den temporaeren Entpackordner). Aus dem
+# Quellcode heraus ist es das Projektverzeichnis.
+PROJECT_DIR = Path(sys.executable).resolve().parent if FROZEN else APP_DIR.parent
+
 PROFILE_DIR = Path(_env("PROFILE_DIR", str(APP_DIR / "profiles")))
 
 

@@ -1,0 +1,149 @@
+name: Windows-EXE bauen
+
+# Erzeugt eine ausfuehrbare Windows-Datei (PyInstaller) und haengt sie als
+# ZIP an den Workflow-Lauf. Bei einem Tag "v*" entsteht zusaetzlich ein Release.
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write        # fuer das Anlegen des Releases bei Tags
+
+env:
+  APP_NAME: VDI3814-DP-Checker
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Quellcode auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Abhaengigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller==6.*
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Beispieldaten erzeugen
+        run: python sample_data/make_samples.py
+
+      - name: EXE bauen
+        run: pyinstaller vdi3814.spec --noconfirm
+
+      - name: Beispieldaten und Kurzanleitung beilegen
+        shell: pwsh
+        run: |
+          $target = "dist/$env:APP_NAME"
+          New-Item -ItemType Directory -Force -Path "$target/sample_data" | Out-Null
+          Copy-Item sample_data/*.pdf "$target/sample_data/" -Force
+          Copy-Item README.md "$target/" -Force
+          @"
+          VDI 3814 DP-Checker
+          ===================
+
+          Starten
+          -------
+          $env:APP_NAME.exe             ... oeffnet die Oberflaeche im Browser
+                                            (laeuft rein lokal auf 127.0.0.1)
+
+          Kommandozeile (optional)
+          ------------------------
+          $env:APP_NAME.exe check
+          $env:APP_NAME.exe import C:\Pfad\zu\Listen
+          $env:APP_NAME.exe export Auswertung.xlsx
+
+          Datenbank und Exporte werden neben der EXE abgelegt (Ordner data\ bzw. out\).
+
+          Fuer gescannte Listen und Bilder wird zusaetzlich Ollama mit einem
+          lokalen Vision-Modell benoetigt (siehe README.md, Abschnitt Installation).
+          Excel-Dateien und PDFs mit Textebene funktionieren ohne Ollama.
+          "@ | Set-Content -Encoding UTF8 "$target/START-HIER.txt"
+
+      - name: Startfaehigkeit pruefen
+        shell: pwsh
+        run: |
+          $exe = "dist/$env:APP_NAME/$env:APP_NAME.exe"
+
+          # 1. Kommandozeile: Profile muessen geladen werden koennen
+          & $exe profile | Tee-Object -Variable profileOut
+          if ($LASTEXITCODE -ne 0) { throw "CLI-Aufruf 'profile' fehlgeschlagen" }
+          if ($profileOut -notmatch "vdi3814_alt") { throw "Spaltenprofile fehlen im Build" }
+
+          # 2. Vollstaendiger Ablauf: Import -> Datenbank -> Excel-Export
+          & $exe import sample_data --kein-modell
+          if ($LASTEXITCODE -ne 0) { throw "Import fehlgeschlagen" }
+          & $exe export pruef.xlsx
+          if ($LASTEXITCODE -ne 0) { throw "Export fehlgeschlagen" }
+          if (-not (Test-Path pruef.xlsx)) { throw "Excel-Datei wurde nicht erzeugt" }
+          Write-Host "Excel-Export erzeugt: $((Get-Item pruef.xlsx).Length) Bytes"
+
+          # 3. Oberflaeche: startet der Streamlit-Server?
+          $process = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          $ready = $false
+          foreach ($attempt in 1..40) {
+            Start-Sleep -Seconds 3
+            foreach ($port in 8501..8505) {
+              try {
+                $response = Invoke-WebRequest "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
+                if ($response.StatusCode -eq 200) {
+                  Write-Host "Oberflaeche erreichbar auf Port $port"
+                  $ready = $true
+                  break
+                }
+              } catch { }
+            }
+            if ($ready) { break }
+          }
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ready) { throw "Oberflaeche war nicht erreichbar" }
+
+      - name: Aufraeumen vor dem Packen
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "dist/$env:APP_NAME/data" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "dist/$env:APP_NAME/out" -ErrorAction SilentlyContinue
+
+      - name: ZIP schnueren
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/$env:APP_NAME/*" -DestinationPath "$env:APP_NAME-windows.zip" -Force
+          Write-Host "Groesse: $([math]::Round((Get-Item "$env:APP_NAME-windows.zip").Length / 1MB, 1)) MB"
+
+      - name: ZIP an den Lauf anhaengen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows
+          path: ${{ env.APP_NAME }}-windows.zip
+          retention-days: 30
+
+      - name: Release veroeffentlichen (nur bei Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APP_NAME }}-windows.zip
+          generate_release_notes: true
+          body: |
+            **VDI 3814 DP-Checker – Windows**
+
+            1. ZIP herunterladen und vollstaendig entpacken
+            2. `VDI3814-DP-Checker.exe` starten – die Oberflaeche oeffnet sich im Browser (rein lokal)
+
+            Fuer gescannte Listen zusaetzlich Ollama mit einem lokalen Vision-Modell
+            installieren (siehe README). Excel-Dateien und PDFs mit Textebene
+            funktionieren ohne Ollama.
