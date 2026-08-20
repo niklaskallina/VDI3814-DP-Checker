@@ -4,6 +4,8 @@ Blaetter:
     Übersicht       - Summen je Funktionsspalte ueber alle importierten Listen
     Kostenschätzung - Einheitspreis je Spalte, Menge per Formel aus "Übersicht",
                       Kosten = Menge * Einheitspreis, Gesamtsumme per SUM()
+    Prüfung         - Abgleich mit der Zeile "Summe Funktionen" und alle bewusst
+                      nicht gezaehlten Zeilen mit Begruendung
     Rohdaten        - jede Einzelzelle mit Quelldatei-, Seiten- und Zeilenbezug
     Dokumente       - importierte Dateien inkl. uebersprungener Seiten/Hinweise
     Fußnoten        - Zaehlregeln der Kopfzeile je Spalte
@@ -140,7 +142,8 @@ def export_workbook(path: str | Path,
                     prices: dict[str, float] | None = None,
                     projects: pd.DataFrame | None = None,
                     currency: str | None = None,
-                    layouts: dict[str, pd.DataFrame] | None = None) -> Path:
+                    layouts: dict[str, pd.DataFrame] | None = None,
+                    pruefung: pd.DataFrame | None = None) -> Path:
     """Schreibt die vollstaendige Auswertung als .xlsx."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +167,8 @@ def export_workbook(path: str | Path,
     menge_col = _sheet_overview(workbook, summary)
     _sheet_costs(workbook, summary, prices, menge_col, currency)
 
+    if pruefung is not None and not pruefung.empty:
+        _write_frame(workbook.create_sheet("Prüfung"), pruefung)
     _write_frame(workbook.create_sheet("Rohdaten"), raw)
     _write_frame(workbook.create_sheet("Dokumente"), documents)
     _write_frame(workbook.create_sheet("Fußnoten"), footnotes)

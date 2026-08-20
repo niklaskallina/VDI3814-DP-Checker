@@ -82,8 +82,12 @@ with st.sidebar:
     st.divider()
     st.caption(f"Ablage: `{projekt.path}`")
     st.caption(f"Größe: {projekt.size_mb} MB")
-    if not ocr.available():
-        st.caption("OCR für Scans: nicht eingerichtet")
+    if ocr.available():
+        st.caption("✅ Excel, PDF und Scans auswertbar – keine Zusatzsoftware nötig")
+    else:
+        st.caption("✅ Excel und PDF mit Textebene auswertbar\n\n"
+                   "⚠️ Für gescannte Listen fehlt die Texterkennung "
+                   "(in der installierten Programmversion ist sie enthalten)")
 
 engine = get_engine(str(projekt.db_path))
 
@@ -110,6 +114,18 @@ with tab_import:
         "und gescannt), PNG/JPEG sowie die Excel-Vorlagen. Regelschemata in denselben "
         "Dateien werden erkannt und übersprungen."
     )
+    with Session(engine) as session:
+        vorhandene = len(db.list_documents(session))
+    if vorhandene == 0:
+        st.info(
+            "**So gehen Sie vor**\n\n"
+            f"1. Unten die Funktionslisten auswählen – sie landen im Projekt „{projektname}“.\n"
+            "2. Reiter 2: Ergebnis prüfen, bei Bedarf Werte korrigieren und speichern.\n"
+            "3. Reiter 3: Auffälligkeiten anklicken – die Stelle wird im Original gezeigt.\n"
+            "4. Reiter 5 und 6: Einheitspreise eintragen und Excel-Datei erzeugen.\n\n"
+            "Für ein anderes Bauvorhaben links ein neues Projekt anlegen."
+        )
+
     uploads = st.file_uploader(
         "Dateien auswählen (mehrere gleichzeitig möglich)", accept_multiple_files=True,
         type=["pdf", "png", "jpg", "jpeg", "tif", "tiff", "xlsx", "xlsm", "xls"],
@@ -468,6 +484,7 @@ with tab_export:
                     projects=aggregate.pivot_projects(raw),
                     layouts={profil: aggregate.vdi_layout_frame(session, profil)
                              for profil in aggregate.profiles_in_use(session)},
+                    pruefung=aggregate.pruefbericht(session),
                 )
             st.success(f"Geschrieben: {pfad}")
             st.download_button("Datei herunterladen", data=Path(pfad).read_bytes(),

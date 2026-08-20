@@ -242,3 +242,64 @@ def profiles_in_use(session: Session) -> list[str]:
     """Profile, zu denen tatsaechlich Daten in der Datenbank liegen."""
     ids = {d.profile_id for d in session.scalars(select(db.Document)) if d.profile_id}
     return sorted(ids)
+
+
+def pruefbericht(session: Session) -> pd.DataFrame:
+    """Nachvollziehbare Dokumentation der Zaehlung.
+
+    Enthaelt je Datei den Abgleich mit der Zeile "Summe Funktionen" sowie jede
+    Zeile, die bewusst nicht gezaehlt wurde - mit Begruendung und Fundstelle.
+    """
+    records: list[dict] = []
+    for document in session.scalars(select(db.Document)):
+        columns = {c.idx: c for c in document.columns}
+        eigene: dict[int, float] = {}
+        gemeldet: dict[int, float] = {}
+        for row in document.rows:
+            for value in row.values:
+                if value.count is None:
+                    continue
+                if row.kind == "daten":
+                    eigene[value.column_idx] = eigene.get(value.column_idx, 0.0) + value.count
+                elif row.kind == "summe":
+                    gemeldet[value.column_idx] = gemeldet.get(value.column_idx, 0.0) + value.count
+
+        for column_idx in sorted(set(eigene) | set(gemeldet)):
+            column = columns.get(column_idx)
+            eigener = eigene.get(column_idx, 0.0)
+            listen = gemeldet.get(column_idx)
+            records.append({
+                "datei": document.file_name,
+                "art": "Summenabgleich",
+                "spalte": column.address if column else str(column_idx),
+                "bezeichnung": column.label if column else "",
+                "seite": "",
+                "zeile": "",
+                "wert_liste": listen if listen is not None else "",
+                "wert_eigene_zaehlung": eigener,
+                "bewertung": ("nicht in der Liste ausgewiesen" if listen is None
+                              else "stimmt überein" if abs(listen - eigener) < 1e-6
+                              else "ABWEICHUNG"),
+                "begruendung": "",
+            })
+
+        for row in document.rows:
+            if row.kind == "daten":
+                continue
+            summe = sum(v.count or 0.0 for v in row.values)
+            records.append({
+                "datei": document.file_name,
+                "art": "nicht gezählte Zeile",
+                "spalte": "",
+                "bezeichnung": row.klartext,
+                "seite": row.page_index + 1,
+                "zeile": row.row_no,
+                "wert_liste": summe,
+                "wert_eigene_zaehlung": 0.0,
+                "bewertung": row.kind,
+                "begruendung": row.exclusion_reason,
+            })
+    return pd.DataFrame(records, columns=[
+        "datei", "art", "spalte", "bezeichnung", "seite", "zeile",
+        "wert_liste", "wert_eigene_zaehlung", "bewertung", "begruendung",
+    ])
