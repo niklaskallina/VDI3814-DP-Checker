@@ -517,6 +517,7 @@ with tab_data:
                                     key="sicher_leeren")
         if st.button("Projekt leeren", disabled=not sicher_leeren):
             get_engine.clear()
+            db.dispose_all()
             projects.clear(projektname)
             st.success(f"Projekt „{projektname}“ ist jetzt leer.")
             st.rerun()
@@ -525,6 +526,7 @@ with tab_data:
                                       key="sicher_loeschen")
         if st.button("Projekt löschen", disabled=not sicher_loeschen):
             get_engine.clear()
+            db.dispose_all()
             projects.delete(projektname)
             st.session_state.pop("projekt", None)
             st.success(f"Projekt „{projektname}“ wurde gelöscht.")

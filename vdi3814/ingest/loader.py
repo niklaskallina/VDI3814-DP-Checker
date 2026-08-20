@@ -80,6 +80,21 @@ def load_pages(path: str | Path, dpi: int | None = None) -> Iterator[PageImage]:
         yield from _load_image(path)
 
 
+def render_pdf_page(path: str | Path, page_index: int, dpi: int | None = None) -> Image.Image:
+    """Rendert genau eine PDF-Seite.
+
+    Bewusst einzeln: bei mehrseitigen Scans wuerde ein Durchlauf durch alle
+    Seiten je Seite die Verarbeitung quadratisch verlangsamen.
+    """
+    import fitz  # PyMuPDF
+
+    zoom = (dpi or SETTINGS.render_dpi) / 72.0
+    with fitz.open(path) as doc:
+        page = doc[page_index]
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+
 def collect_files(paths: list[str | Path]) -> list[Path]:
     """Sammelt aus Dateien/Ordnern alle unterstuetzten Dateien (Batch-Import)."""
     files: list[Path] = []

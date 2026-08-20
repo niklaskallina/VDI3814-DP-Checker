@@ -248,9 +248,33 @@ def _migrate(engine) -> None:
             ))
 
 
+# Offene Verbindungen je Datenbankdatei. Unter Windows laesst sich eine Datei
+# nicht loeschen, solange sie geoeffnet ist - deshalb werden die Verbindungen
+# hier verwaltet und vor dem Loeschen eines Projekts geschlossen.
+_ENGINES: dict[str, object] = {}
+
+
+def dispose_engine(db_path: str | Path) -> None:
+    """Schliesst alle Verbindungen zu einer Datenbankdatei."""
+    schluessel = str(Path(db_path).resolve())
+    engine = _ENGINES.pop(schluessel, None)
+    if engine is not None:
+        engine.dispose()
+
+
+def dispose_all() -> None:
+    for engine in list(_ENGINES.values()):
+        engine.dispose()
+    _ENGINES.clear()
+
+
 def make_engine(db_path: str | Path | None = None):
     path = Path(db_path or SETTINGS.db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    schluessel = str(path.resolve())
+    vorhanden = _ENGINES.get(schluessel)
+    if vorhanden is not None:
+        return vorhanden
     engine = create_engine(f"sqlite:///{path}", future=True)
 
     @event.listens_for(engine, "connect")
@@ -261,6 +285,7 @@ def make_engine(db_path: str | Path | None = None):
 
     Base.metadata.create_all(engine)
     _migrate(engine)
+    _ENGINES[schluessel] = engine
     return engine
 
 

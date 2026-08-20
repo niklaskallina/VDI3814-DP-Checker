@@ -24,7 +24,7 @@ from .extract.ocr_extractor import classify_image, extract_ocr
 from .extract.pdftext_extractor import classify_page_text
 from .extract.base import ExtractionMode, RawTable
 from .extract.vision_extractor import classify_page, extract_vision
-from .ingest.loader import SUPPORTED_SUFFIXES, file_hash, load_pages
+from .ingest.loader import SUPPORTED_SUFFIXES, file_hash, load_pages, render_pdf_page
 from .models import (
     Cell,
     ColumnHeader,
@@ -189,13 +189,13 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
                 ))
                 continue
 
-        # Sonst Bild rendern und das Vision-Modell fragen
-        page_image = None
-        for candidate in load_pages(path, settings.render_dpi):
-            if candidate.page_index == page_index:
-                page_image = candidate.image
-                break
-        if page_image is None:                            # pragma: no cover
+        # Sonst genau diese eine Seite rendern und auswerten
+        try:
+            page_image = render_pdf_page(path, page_index, settings.render_dpi)
+        except Exception as exc:                          # pragma: no cover - defekte Datei
+            log.warning("Seite %d von %s nicht rendbar: %s", page_index, path.name, exc)
+            page_image = None
+        if page_image is None:
             pages.append(PageResult(page_index=page_index,
                                     classification=PageClassification(PageKind.FEHLER, 0.0,
                                                                       "Seite konnte nicht gerendert werden")))

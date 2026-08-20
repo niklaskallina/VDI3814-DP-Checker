@@ -37,12 +37,6 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller==6.*
 
-      - name: Tests
-        run: pytest -q
-
-      - name: Beispieldaten erzeugen
-        run: python sample_data/make_samples.py
-
       - name: Texterkennung (Tesseract) beilegen
         shell: pwsh
         run: |
@@ -67,6 +61,12 @@ jobs:
           }
           Copy-Item packaging/TESSERACT-LIZENZ.txt "$ziel/" -Force
           Write-Host "Beigelegt: $((Get-ChildItem -Recurse $ziel | Measure-Object -Property Length -Sum).Sum / 1MB) MB"
+
+      - name: Tests
+        run: pytest -q            # inkl. Scan-Auswertung, da Tesseract bereits vorliegt
+
+      - name: Beispieldaten erzeugen
+        run: python sample_data/make_samples.py
 
       - name: EXE bauen
         run: pyinstaller vdi3814.spec --noconfirm

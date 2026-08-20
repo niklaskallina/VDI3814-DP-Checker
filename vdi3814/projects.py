@@ -93,8 +93,20 @@ def delete(name: str) -> bool:
     project = get(name)
     if not project.path.exists():
         return False
+    _verbindungen_schliessen(project)
     shutil.rmtree(project.path)
     return True
+
+
+def _verbindungen_schliessen(project: Project) -> None:
+    """Datenbankverbindungen freigeben.
+
+    Windows laesst eine geoeffnete Datei nicht loeschen - ohne diesen Schritt
+    schluege "Projekt leeren" bzw. "Projekt loeschen" dort fehl.
+    """
+    from . import db
+
+    db.dispose_engine(project.db_path)
 
 
 def clear(name: str) -> bool:
@@ -102,6 +114,7 @@ def clear(name: str) -> bool:
     project = get(name)
     if not project.path.exists():
         return False
+    _verbindungen_schliessen(project)
     project.db_path.unlink(missing_ok=True)
     if project.sources_dir.exists():
         shutil.rmtree(project.sources_dir)

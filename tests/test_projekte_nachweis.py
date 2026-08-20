@@ -88,3 +88,14 @@ def test_befunde_melden_nur_pruefwuerdiges(projektordner, samples):
     # Eine stimmige Summenzeile ist kein Befund
     assert not [b for b in befunde if b.art == "abweichung"]
     assert not [b for b in befunde if "Summe Funktionen" in b.titel]
+
+
+def test_projekt_loeschen_bei_offener_datenbank(projektordner, samples):
+    """Unter Windows scheitert das Loeschen, wenn die Datei noch geoeffnet ist."""
+    projekt = projects.create("Offen")
+    engine = db.make_engine(projekt.db_path)
+    with Session(engine) as session:
+        db.save_document(session, process_file(samples["alt"]))
+    # bewusst KEIN dispose durch den Aufrufer - das muss das Programm erledigen
+    assert projects.delete("Offen") is True
+    assert not projekt.path.exists()
