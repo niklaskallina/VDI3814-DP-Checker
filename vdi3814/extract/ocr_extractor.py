@@ -264,9 +264,10 @@ def zellen_ocr(image: Image.Image, spalten_kanten: list[float], zeilen_kanten: l
     for oben, unten in zip(zeilen_kanten, zeilen_kanten[1:]):
         if unten - oben < 8:
             continue
-        mitte_y = (oben + unten) / 2
 
-        # Beschriftung der Zeile (links der ersten Funktionsspalte)
+        # Beschriftung der Zeile (links der ersten Funktionsspalte). Bewusst
+        # zeilenweise: ein Sammeldurchgang ueber die ganze Spalte liest die
+        # Datenpunktnamen deutlich schlechter.
         bereich = arr[oben + 2:unten - 1, 0:int(label_rechts)]
         if _hat_inhalt(bereich, schwelle=0.004):
             zuschnitt = grau.crop((0, oben + 1, int(label_rechts), unten - 1))
