@@ -3,10 +3,10 @@
 import openpyxl
 import pytest
 
-from vdi3814.extract.base import sections_by_position, truncate_after_sum
+from vdi3814.extract.base import drop_after_footer, sections_by_position
 from vdi3814.extract.excel_extractor import extract_excel
 from vdi3814.extract.pdftext_extractor import classify_page_text, extract_pdf_text
-from vdi3814.models import DataPointRow
+from vdi3814.models import DataPointRow, RowKind
 from vdi3814.pipeline import process_file
 
 
@@ -126,11 +126,12 @@ def test_abschnittszuordnung_ueber_position():
 def test_fussbereich_wird_abgeschnitten():
     rows = [
         DataPointRow(klartext="Pumpe"),
-        DataPointRow(klartext="Summe Funktionen", is_sum_row=True),
-        DataPointRow(klartext="Ausgabedatum"),
-        DataPointRow(klartext="Rev. 1"),
+        DataPointRow(klartext="Summe Funktionen", kind=RowKind.SUMME),
+        DataPointRow(klartext="Ausgabedatum", kind=RowKind.FUSSBEREICH),
+        DataPointRow(klartext="Rev. 1", kind=RowKind.FUSSBEREICH),
     ]
-    assert [r.klartext for r in truncate_after_sum(rows)] == ["Pumpe", "Summe Funktionen"]
+    # Die Summenzeile bleibt zur Kontrolle erhalten, der Fussbereich faellt weg
+    assert [r.klartext for r in drop_after_footer(rows)] == ["Pumpe", "Summe Funktionen"]
 
 
 def test_unbekannter_dateityp_stuerzt_nicht_ab(tmp_path):
@@ -168,7 +169,7 @@ def test_fussbereich_mit_werten_unter_der_beschriftung(tmp_path):
     document.save(path)
     document.close()
 
-    from vdi3814.extract.pdftext_extractor import _cluster_rows, _extract_metadata, _HeaderGrid
+    from vdi3814.extract.wordgrid import _extract_metadata, _HeaderGrid
 
     with pymupdf.open(path) as opened:
         words = opened[0].get_text("words")
@@ -178,3 +179,38 @@ def test_fussbereich_mit_werten_unter_der_beschriftung(tmp_path):
     assert metadata.planersteller == "IPG Ingenieur-Planung"
     assert metadata.projekt == "Mehrzweckhalle Tralau"
     assert metadata.datum == "2024-11-02"
+
+
+def test_summen_uebertrags_und_fussbereichszeilen_zaehlen_nicht(tmp_path):
+    """Kern der Kalkulation: nur echte Datenpunkte gehen in die Summe ein."""
+    path = tmp_path / "mitUebertrag.xlsx"
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet["D2"] = "1. Ein-/Ausgabefunktionen"
+    sheet["D3"] = "Physikalische"
+    sheet["D4"], sheet["E4"] = "Analoge Eingabe (AI)", "Binäre Eingabe (BI)"
+    sheet["F4"], sheet["G4"] = "Analoge Ausgabe (AO)", "Binäre Ausgabe (BO)"
+    sheet["C5"], sheet["D5"] = "Abschnitt ", "1.1."
+    sheet["C6"] = "Spalte "
+    sheet["D6"], sheet["E6"], sheet["F6"], sheet["G6"] = "1", "2", "3", "4"
+    sheet["A7"], sheet["B7"], sheet["D7"] = "1", "Übertrag von Blatt 1", 40
+    sheet["A8"], sheet["B8"], sheet["D8"] = "2", "Vorlauftemperatur", 1
+    sheet["A9"], sheet["B9"], sheet["E9"] = "3", "Pumpe", 2
+    sheet["A10"] = "4"                                     # komplett leere Zeile
+    sheet["B11"], sheet["D11"], sheet["E11"] = "Zwischensumme", 41, 2
+    sheet["B12"], sheet["D12"] = "Planersteller", 99
+    sheet["B13"] = "22941 Bargteheide"
+    book.save(path)
+
+    result = process_file(path)
+    gezaehlt = [r.klartext for r in result.counted_rows()]
+    assert gezaehlt == ["Vorlauftemperatur", "Pumpe"]
+    assert result.grand_total() == 3            # 1 + 2, ohne Übertrag/Zwischensumme
+    gruende = {r.kind.value for r in result.excluded_rows()}
+    assert "uebertrag" in gruende and "summe" in gruende and "leer" in gruende
+    assert all(r.exclusion_reason for r in result.excluded_rows() if r.kind.value != "daten")
+
+
+def test_leerzeilen_zaehlen_nicht_als_datenpunkt(samples):
+    result = process_file(samples["alt"])
+    assert all(row.has_values for row in result.counted_rows())

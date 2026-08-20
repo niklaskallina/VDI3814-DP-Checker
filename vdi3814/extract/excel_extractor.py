@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote
+from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote, RowKind
 from ..textutil import extract_footnote_markers, normalize, normalize_address, parse_count
-from .base import ExtractionMode, RawTable, assign_sections, is_sum_label, truncate_after_sum
+from .base import ExtractionMode, RawTable, assign_sections, drop_after_footer
+from .rowfilter import classify_row
 
 log = logging.getLogger(__name__)
 
@@ -329,6 +330,13 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
         remark = " ".join(_value_at(grid, r, c) for c in sorted(note_cols)).strip()
         klartext = " ".join(texts).strip()
 
+        has_values = any(cell.count is not None for cell in cells)
+        # Nur die Beschriftung bewerten - die Zeilennummer allein macht
+        # aus einer leeren Zeile keinen Datenpunkt.
+        kind, reason = classify_row(klartext, has_values, remark)
+        if kind is RowKind.FUSSBEREICH:
+            # Unterhalb der Tabelle beginnt der Fussbereich - ab hier nichts mehr
+            break
         rows.append(
             DataPointRow(
                 row_no=row_no,
@@ -337,12 +345,13 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
                 remark=remark,
                 cells=cells,
                 page_index=sheet_index,
-                is_sum_row=is_sum_label(klartext) or any(is_sum_label(t) for t in left_texts),
+                kind=kind,
+                exclusion_reason=reason,
                 confidence=1.0,
             )
         )
 
-    rows = truncate_after_sum(rows)
+    rows = drop_after_footer(rows)
     texts = [" ".join(value for value in row if value) for row in grid[:max(section_row + 2, 12)]]
     return RawTable(
         page_index=sheet_index,

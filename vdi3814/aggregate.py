@@ -31,8 +31,10 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
     for document in session.scalars(select(db.Document)):
         columns = {c.idx: c for c in document.columns}
         for row in document.rows:
-            if row.is_sum_row:
-                continue                      # Summenzeilen nie mitzaehlen
+            # Nur echte Datenpunkte: keine Summen-, Uebertrags-, Leer-,
+            # Kopf- oder Fussbereichszeilen.
+            if row.kind != "daten":
+                continue
             for value in row.values:
                 column = columns.get(value.column_idx)
                 if column is None or column.is_note:
@@ -156,9 +158,13 @@ def documents_frame(session: Session) -> pd.DataFrame:
             "seiten_uebersprungen": "; ".join(
                 f"S.{p.page_index + 1} ({p.kind})" for p in sorted(skipped, key=lambda p: p.page_index)
             ),
-            "datenpunkte": len([r for r in document.rows if not r.is_sum_row]),
-            "summe_funktionen": sum(v.count or 0.0 for r in document.rows if not r.is_sum_row
-                                    for v in r.values),
+            "datenpunkte": len([r for r in document.rows if r.is_countable]),
+            "summe_funktionen": sum(v.count or 0.0 for r in document.rows
+                                    if r.kind == "daten" for v in r.values),
+            "zeilen_ausgeschlossen": "; ".join(
+                sorted({f"{r.kind}: {len([x for x in document.rows if x.kind == r.kind])}"
+                        for r in document.rows if r.kind != "daten"})
+            ),
             "hinweise": " | ".join(document.warnings),
             "importiert_am": document.imported_at,
             "quelle": document.source_path,
@@ -178,3 +184,61 @@ def footnotes_frame(session: Session) -> pd.DataFrame:
                 "bezieht_sich_auf": footnote.referenced_columns,
             })
     return pd.DataFrame(records, columns=["datei", "fassung", "marker", "text", "bezieht_sich_auf"])
+
+
+def vdi_layout_frame(session: Session, profile_id: str) -> pd.DataFrame:
+    """Datenpunkte im Original-Layout der VDI-Funktionsliste.
+
+    Eine Zeile je Datenpunkt, eine Spalte je Funktionsspalte des Profils -
+    also genau der Aufbau der Papierliste, nur ueber alle importierten Dateien
+    hinweg. Grundlage fuer das Blatt "GA-Funktionsliste" im Excel-Export.
+    """
+    profile = get_profile(profile_id)
+    if profile is None:
+        return pd.DataFrame()
+
+    column_titles = [column.label for column in profile.columns]
+    kopf = ["Datei", "Blatt", "Zeile Nr.", "Datenpunkt", "Benutzeradresse", "Typ"]
+    records: list[dict] = []
+
+    for document in session.scalars(select(db.Document).order_by(db.Document.file_name)):
+        if document.profile_id != profile_id:
+            continue
+        columns = {c.idx: c for c in document.columns}
+        for row in document.rows:
+            if row.kind != "daten" or not row.is_countable:
+                continue
+            record = {
+                "Datei": document.file_name,
+                "Blatt": document.blatt_nr or "",
+                "Zeile Nr.": row.row_no,
+                "Datenpunkt": row.klartext,
+                "Benutzeradresse": row.bas,
+                "Typ": row.qualifier,
+            }
+            for title in column_titles:
+                record[title] = None
+            bemerkungen = [row.remark] if row.remark else []
+            for value in row.values:
+                column = columns.get(value.column_idx)
+                if column is None:
+                    continue
+                profile_column = profile.column(column.column_key) if column.column_key else None
+                if profile_column is None or profile_column.is_note:
+                    if value.note:
+                        bemerkungen.append(value.note)
+                    continue
+                if value.count is not None:
+                    record[profile_column.label] = value.count
+                elif value.note:
+                    bemerkungen.append(value.note)
+            record["Bemerkungen"] = " | ".join(b for b in bemerkungen if b)
+            records.append(record)
+
+    return pd.DataFrame(records, columns=kopf + column_titles + ["Bemerkungen"])
+
+
+def profiles_in_use(session: Session) -> list[str]:
+    """Profile, zu denen tatsaechlich Daten in der Datenbank liegen."""
+    ids = {d.profile_id for d in session.scalars(select(db.Document)) if d.profile_id}
+    return sorted(ids)

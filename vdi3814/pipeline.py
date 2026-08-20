@@ -33,6 +33,7 @@ from .models import (
     PageClassification,
     PageKind,
     PageResult,
+    RowKind,
     SumCheck,
 )
 from .profiles_loader import Profile, assign_footnotes, detect_profile, enrich_columns, match_columns
@@ -121,8 +122,8 @@ def _validate_sums(result: DocumentResult) -> list[SumCheck]:
     """Vergleicht die eigene Aufsummierung mit der Summenzeile des Dokuments."""
     reported: dict[int, float] = {}
     for row in result.rows:
-        if not row.is_sum_row:
-            continue
+        if row.kind is not RowKind.SUMME:
+            continue        # Uebertraege NICHT als Kontrollsumme verwenden
         for cell in row.cells:
             if cell.count is not None:
                 reported[cell.column_index] = reported.get(cell.column_index, 0.0) + cell.count

@@ -21,11 +21,13 @@ from PIL import Image
 
 from ..config import SETTINGS
 from ..ingest.preprocess import crop_band, crop_footer, crop_header, prepare_for_vision, stack_with_header
-from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote, PageClassification, PageKind
+from ..models import (Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote,
+                      PageClassification, PageKind, RowKind)
 from ..textutil import extract_footnote_markers, normalize, parse_count
 from ..vision import prompts
 from ..vision.base import VisionError
-from .base import ExtractionMode, RawTable, is_sum_label, truncate_after_sum
+from .base import ExtractionMode, RawTable, drop_after_footer
+from .rowfilter import classify_row
 
 log = logging.getLogger(__name__)
 
@@ -93,9 +95,12 @@ def _rows_from_answer(answer: dict, page_index: int, column_count: int) -> list[
             cells.append(Cell(column_index=column_index, raw_value=text, count=count,
                               note="" if count is not None else text))
         klartext = str(raw.get("klartext", "")).strip()
-        sum_row = bool(raw.get("summenzeile")) or is_sum_label(klartext)
         if not klartext and not cells and not raw.get("bas"):
             continue
+        has_values = any(cell.count is not None for cell in cells)
+        kind, reason = classify_row(klartext, has_values, str(raw.get("bemerkung", "")))
+        if bool(raw.get("summenzeile")) and kind is RowKind.DATEN:
+            kind, reason = RowKind.SUMME, "Vom Modell als Summenzeile gemeldet"
         rows.append(
             DataPointRow(
                 row_no=str(raw.get("zeile_nr", "")).strip(),
@@ -105,7 +110,8 @@ def _rows_from_answer(answer: dict, page_index: int, column_count: int) -> list[
                 remark=str(raw.get("bemerkung", "")).strip(),
                 cells=cells,
                 page_index=page_index,
-                is_sum_row=sum_row,
+                kind=kind,
+                exclusion_reason=reason,
                 confidence=0.6,          # Modellwerte gelten als pruefbeduerftig
             )
         )
@@ -184,7 +190,7 @@ def extract_vision(backend, image: Image.Image, page_index: int,
         page_index=page_index,
         mode=ExtractionMode.VISION,
         columns=columns,
-        rows=truncate_after_sum(rows),
+        rows=drop_after_footer(rows),
         footnotes=footnotes,
         metadata=metadata,
         texts=texts,

@@ -172,6 +172,8 @@ def cmd_export(args) -> int:
             footnotes=aggregate.footnotes_frame(session),
             prices=db.get_unit_prices(session),
             projects=aggregate.pivot_projects(raw),
+            layouts={profile_id: aggregate.vdi_layout_frame(session, profile_id)
+                     for profile_id in aggregate.profiles_in_use(session)},
         )
     print(f"Export geschrieben: {path}")
     return 0

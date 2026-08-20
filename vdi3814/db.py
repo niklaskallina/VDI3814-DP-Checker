@@ -38,6 +38,7 @@ from .models import (
     PageClassification,
     PageKind,
     PageResult,
+    RowKind,
 )
 
 
@@ -127,8 +128,13 @@ class Row(Base):
     klartext: Mapped[str] = mapped_column(Text, default="")
     qualifier: Mapped[str] = mapped_column(Text, default="")
     remark: Mapped[str] = mapped_column(Text, default="")
-    is_sum_row: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String(16), default="daten", index=True)
+    exclusion_reason: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+    @property
+    def is_countable(self) -> bool:
+        return self.kind == "daten" and any(v.count is not None for v in self.values)
 
     document: Mapped[Document] = relationship(back_populates="rows")
     values: Mapped[list["Value"]] = relationship(back_populates="row", cascade="all, delete-orphan")
@@ -177,6 +183,46 @@ class UnitPrice(Base):
 # Verbindung
 # --------------------------------------------------------------------------
 
+def _migrate(engine) -> None:
+    """Ergaenzt fehlende Spalten in einer aelteren Datenbank.
+
+    So bleiben bereits importierte Listen erhalten, wenn das Datenmodell
+    erweitert wird - ein Neuaufbau der Datenbank ist nie noetig.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            vorhanden = {
+                row[1] for row in connection.execute(text(f"PRAGMA table_info('{table.name}')"))
+            }
+            if not vorhanden:
+                continue                      # Tabelle wird ohnehin neu angelegt
+            for column in table.columns:
+                if column.name in vorhanden:
+                    continue
+                typ = column.type.compile(engine.dialect)
+                default = column.default.arg if getattr(column.default, "is_scalar", False) else None
+                zusatz = ""
+                if isinstance(default, str):
+                    zusatz = f" DEFAULT '{default}'"
+                elif isinstance(default, (int, float)):
+                    zusatz = f" DEFAULT {default}"
+                connection.execute(
+                    text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {typ}{zusatz}")
+                )
+
+        # Alte Kennzeichnung der Summenzeilen uebernehmen
+        rows_columns = {row[1] for row in connection.execute(text("PRAGMA table_info('rows')"))}
+        if {"is_sum_row", "kind"} <= rows_columns:
+            connection.execute(text(
+                "UPDATE rows SET kind = 'summe' WHERE is_sum_row = 1 AND (kind IS NULL OR kind = '')"
+            ))
+            connection.execute(text(
+                "UPDATE rows SET kind = 'daten' WHERE kind IS NULL OR kind = ''"
+            ))
+
+
 def make_engine(db_path: str | Path | None = None):
     path = Path(db_path or SETTINGS.db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +235,7 @@ def make_engine(db_path: str | Path | None = None):
         cursor.close()
 
     Base.metadata.create_all(engine)
+    _migrate(engine)
     return engine
 
 
@@ -257,7 +304,8 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             klartext=row.klartext,
             qualifier=row.qualifier,
             remark=row.remark,
-            is_sum_row=row.is_sum_row,
+            kind=row.kind.value,
+            exclusion_reason=row.exclusion_reason,
             confidence=row.confidence,
         )
         session.add(db_row)
@@ -346,7 +394,8 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
             qualifier=row.qualifier,
             remark=row.remark,
             page_index=row.page_index,
-            is_sum_row=row.is_sum_row,
+            kind=RowKind(row.kind) if row.kind else RowKind.DATEN,
+            exclusion_reason=row.exclusion_reason,
             confidence=row.confidence,
             cells=[Cell(column_index=v.column_idx, raw_value=v.raw_value, count=v.count, note=v.note)
                    for v in row.values],

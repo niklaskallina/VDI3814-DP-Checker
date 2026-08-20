@@ -2,53 +2,28 @@
 
 Die meisten GA-Funktionslisten liegen als PDF-Druck einer Excel-Vorlage vor.
 Dann sind alle Zellwerte als Text mit exakten Koordinaten vorhanden - eine
-Bilderkennung waere hier unnoetig ungenau. Dieses Backend rekonstruiert das
-Tabellenraster aus den Kopfzeilen "Abschnitt" und "Spalte".
+Bilderkennung waere hier unnoetig ungenau.
 
-Nur wenn diese Kopfzeilen fehlen oder das PDF keine Textebene hat, uebernimmt
-das Vision-Backend.
+Dieses Modul liefert nur die PDF-spezifischen Teile:
+* die Woerter mit Koordinaten aus der Textebene,
+* die Unterkante des Datenbereichs aus den gezeichneten Spaltentrennern,
+* eine Seitenklassifikation ohne Modell.
+
+Die eigentliche Rekonstruktion der Tabelle uebernimmt wordgrid.py, das
+dieselbe Logik auch auf OCR-Woerter gescannter Seiten anwendet.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from dataclasses import dataclass
+from collections import Counter
 from pathlib import Path
 
-from ..models import ColumnHeader, DataPointRow, Cell, DocumentMetadata, Footnote
-from ..textutil import extract_footnote_markers, normalize, normalize_address, parse_count
-from .base import (ExtractionMode, RawTable, is_sum_label, nearest_section,
-                   sections_by_position, truncate_after_sum)
+from ..textutil import normalize
+from .base import ExtractionMode, RawTable
+from .wordgrid import Word, extract_table_from_words
 
 log = logging.getLogger(__name__)
-
-Word = tuple[float, float, float, float, str, int, int, int]
-
-# Toleranzen in PDF-Punkten
-ROW_TOLERANCE = 4.0        # Zeilenhoehe-Streuung beim y-Clustern
-LABEL_ROW_TOLERANCE = 5.0  # Suchband um die Kopfzeilen "Abschnitt"/"Spalte"
-
-_INT_RE = re.compile(r"^\d{1,3}$")
-_ADDR_RE = re.compile(r"^\d{1,2}(\.\d{1,2})*\.?$")
-
-
-def _is_rotated(word: Word) -> bool:
-    """Senkrecht gesetzter Text: Wortbox ist deutlich hoeher als breit.
-
-    Die Mindesthoehe verhindert Fehltreffer bei kurzen waagerechten Woertern
-    wie "01" oder "B", deren Box zufaellig hochkant wirkt.
-    """
-    height = word[3] - word[1]
-    return height > (word[2] - word[0]) * 1.6 and height > 12.0
-
-
-def _cx(word: Word) -> float:
-    return (word[0] + word[2]) / 2.0
-
-
-def _cy(word: Word) -> float:
-    return (word[1] + word[3]) / 2.0
 
 
 def pdf_has_text_layer(path: str | Path, min_chars: int = 200) -> bool:
@@ -62,257 +37,63 @@ def pdf_has_text_layer(path: str | Path, min_chars: int = 200) -> bool:
     return False
 
 
-@dataclass
-class _HeaderGrid:
-    columns: list[ColumnHeader]
-    body_top: float          # y, ab der die Datenzeilen beginnen
-    label_left: float        # x-Grenze: links davon steht die Datenpunktbenennung
-    note_left: float | None  # x, ab der die Bemerkungsspalte beginnt
-    labels_top: float = 0.0  # y, ab der die Spaltenueberschriften beginnen
+def _vertical_segments(page) -> list[tuple[float, float, float]]:
+    """Alle senkrechten Linien der Seite als (x, y_oben, y_unten)."""
+    try:
+        drawings = page.get_drawings()
+    except Exception:                       # pragma: no cover - defensiv
+        return []
+
+    segments: list[tuple[float, float, float]] = []
+    for item in drawings:
+        for operation in item.get("items", []):
+            if operation[0] == "l":
+                start, end = operation[1], operation[2]
+                x0, x1 = start.x, end.x
+                y0, y1 = min(start.y, end.y), max(start.y, end.y)
+            elif operation[0] == "re":
+                rect = operation[1]
+                x0, x1 = rect.x0, rect.x1
+                y0, y1 = rect.y0, rect.y1
+            else:
+                continue
+            if abs(x1 - x0) < 1.5 and (y1 - y0) > 20.0:
+                segments.append((x0, y0, y1))
+    return segments
 
 
-def _find_label_word(words: list[Word], *labels: str) -> Word | None:
-    wanted = {normalize(label) for label in labels}
-    for word in words:
-        if normalize(word[4]) in wanted:
-            return word
-    return None
+def make_table_bottom_finder(page):
+    """Liefert eine Funktion, die die Unterkante des Datenbereichs bestimmt.
 
-
-def _band(words: list[Word], anchor: Word, tolerance: float = LABEL_ROW_TOLERANCE) -> list[Word]:
-    center = _cy(anchor)
-    return sorted(
-        (w for w in words if abs(_cy(w) - center) <= tolerance),
-        key=lambda w: w[0],
-    )
-
-
-def _rotated_labels(words: list[Word], columns: list[ColumnHeader], header_bottom: float,
-                    pitch: float, used: set[int]) -> float:
-    """Rekonstruiert die senkrecht gedruckten Spaltenueberschriften.
-
-    Bei 90 Grad gedrehtem Text liefert PyMuPDF pro Wort eine schmale, hohe Box
-    an der x-Position der Spalte; die Leserichtung ist von unten nach oben.
-    Oberhalb der Ueberschriften steht haeufig der Fussnotenblock - er wird
-    dadurch abgetrennt, dass nur der zusammenhaengende Wortstapel direkt ueber
-    der Kopfzeile uebernommen wird (Abbruch bei einer groesseren Luecke).
-
-    Rueckgabe: die oberste y-Koordinate der erkannten Ueberschriften. Alles
-    darueber gehoert nicht mehr zur Tabelle.
+    Die senkrechten Trennlinien der Funktionsspalten laufen genau ueber den
+    Datenbereich: sie beginnen an der Unterkante der Kopfzeilen und enden am
+    Tabellenende. Damit ist die Grenze zwischen Tabelle und Fussbereich exakt
+    bestimmt - Postleitzahlen, Revisionsstaende oder Planerangaben koennen
+    nicht mehr als Datenpunkte gelesen werden.
     """
-    tolerance = max(3.0, pitch * 0.45)
-    top = header_bottom
-    for column in columns:
-        if column.x_center is None:
-            continue
-        # Ein Wort gehoert zur Spaltenueberschrift, wenn seine Box in die
-        # Spaltenbreite passt (senkrechter Text) - der Aspekt-Test allein
-        # scheitert an kurzen Fussnotenzeichen wie "1)".
-        parts = [
-            (index, w) for index, w in enumerate(words)
-            if w[3] <= header_bottom
-            and abs(_cx(w) - column.x_center) <= tolerance
-            and (w[2] - w[0]) <= pitch * 1.15
+    segments = _vertical_segments(page)
+
+    def finder(body_top: float, x_left: float, x_right: float,
+               pitch: float, row_pitch: float) -> float | None:
+        if not segments:
+            return None
+        # Toleranz aus der gemessenen Geometrie der Seite, keine feste Groesse.
+        start_tolerance = max(pitch * 0.5, row_pitch * 0.9)
+        links, rechts = x_left - pitch, x_right + pitch
+        bottoms = [
+            round(y1, 1) for x0, y0, y1 in segments
+            if links <= x0 <= rechts
+            and abs(y0 - body_top) <= start_tolerance
+            and y1 > body_top + start_tolerance
         ]
-        if not parts:
-            continue
-        parts.sort(key=lambda item: -item[1][1])
-        stack = [parts[0]]
-        for index, word in parts[1:]:
-            if stack[-1][1][1] - word[3] > 8.0:   # Luecke -> Fussnotenblock beginnt
-                break
-            stack.append((index, word))
-        text = " ".join(w[4] for _, w in stack).strip()
-        column.label = text
-        column.footnote_markers = extract_footnote_markers(text)
-        used.update(index for index, _ in stack)
-        top = min(top, min(w[1] for _, w in stack))
-    return top
+        if not bottoms:
+            return None
+        # Die Spaltentrenner enden alle auf derselben Hoehe - haeufigster Wert.
+        haeufigkeit = Counter(bottoms)
+        hoechste = max(haeufigkeit.values())
+        return max(value for value, count in haeufigkeit.items() if count == hoechste)
 
-
-def _build_grid(words: list[Word], page_width: float, used: set[int]) -> _HeaderGrid | None:
-    section_anchor = _find_label_word(words, "Abschnitt")
-    column_anchor = _find_label_word(words, "Spalte")
-    if section_anchor is None or column_anchor is None:
-        return None
-
-    section_band = [w for w in _band(words, section_anchor) if _cx(w) > _cx(section_anchor)]
-    column_band = [w for w in _band(words, column_anchor) if _cx(w) > _cx(column_anchor)]
-
-    sections = [(_cx(w), normalize_address(w[4])) for w in section_band if _ADDR_RE.match(w[4].strip())]
-    column_words = [w for w in column_band if _INT_RE.match(w[4].strip())]
-    if len(column_words) < 4:
-        return None
-
-    numbers = [w[4].strip() for w in column_words]
-    section_ids = sections_by_position(numbers, [_cx(w) for w in column_words], sections)
-
-    columns: list[ColumnHeader] = []
-    for index, word in enumerate(column_words):
-        section = section_ids[index] if section_ids else nearest_section(_cx(word), sections)
-        columns.append(
-            ColumnHeader(
-                index=index,
-                section=section,
-                column_no=word[4].strip(),
-                x_center=_cx(word),
-            )
-        )
-
-    xs = [c.x_center for c in columns if c.x_center is not None]
-    pitch = (max(xs) - min(xs)) / max(1, len(xs) - 1)
-    header_bottom = min(_cy(section_anchor), _cy(column_anchor)) - LABEL_ROW_TOLERANCE
-    labels_top = _rotated_labels(words, columns, header_bottom, pitch, used)
-
-    note_anchor = _find_label_word(words, "Bemerkung", "Bemerkungen", "Bemerkungen und Referenzierungen")
-    note_left = None
-    if note_anchor is not None and note_anchor[0] > max(xs):
-        note_left = note_anchor[0] - pitch
-        columns.append(
-            ColumnHeader(
-                index=len(columns),
-                label=note_anchor[4],
-                section=nearest_section(_cx(note_anchor), sections),
-                x_center=_cx(note_anchor),
-            )
-        )
-
-    return _HeaderGrid(
-        columns=columns,
-        body_top=max(_cy(section_anchor), _cy(column_anchor)) + LABEL_ROW_TOLERANCE,
-        label_left=min(xs) - pitch * 0.6,
-        note_left=note_left,
-        labels_top=labels_top,
-    )
-
-
-def _cluster_rows(words: list[Word], tolerance: float = ROW_TOLERANCE) -> list[list[Word]]:
-    """Gruppiert Woerter zu Tabellenzeilen ueber ihre y-Mitte."""
-    ordered = sorted(words, key=_cy)
-    clusters: list[list[Word]] = []
-    for word in ordered:
-        if clusters and abs(_cy(word) - _cy(clusters[-1][-1])) <= tolerance:
-            clusters[-1].append(word)
-        else:
-            clusters.append([word])
-    return [sorted(cluster, key=lambda w: w[0]) for cluster in clusters]
-
-
-def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> DocumentMetadata:
-    """Liest Kopf-/Fussbereich ueber Beschriftungen wie 'Gewerk:' oder 'Anlage:'."""
-    labels = {
-        "gewerk": "gewerk",
-        "anlage": "anlage",
-        "projekt": "projekt",
-        "auftraggeber projekt": "auftraggeber",
-        "auftraggeber": "auftraggeber",
-        "planersteller": "planersteller",
-        "planstand": "planstand",
-        "blatt nr": "blatt_nr",
-        "von": "blatt_von",   # nur gueltig, wenn "Blatt Nr." schon gefunden wurde
-        "informationsschwerpunkt": "informationsschwerpunkt",
-        "datenkommunikationsprotokoll": "protokoll",
-        "ausgabedatum": "datum",
-        "datum": "datum",
-    }
-    # Woerter, die im Fussbereich als weitere Beschriftung dienen und deshalb
-    # nie ein Wert sein koennen.
-    stop_words = {"name", "geprueft", "inhalt", "index", "rev", "blatt", "datei",
-                  "asp", "seite", "stand"}
-    metadata = DocumentMetadata()
-
-    def is_label_row(row: list[Word]) -> bool:
-        """Fussbereichs-Beschriftungszeile ('Ausgabedatum | Name | Planersteller | ...').
-
-        Dort stehen die Werte UNTER der Beschriftung, nicht daneben.
-        """
-        hits = sum(1 for w in row if normalize(w[4].rstrip(":")) in labels)
-        return hits >= 2
-
-    rows = _cluster_rows(
-        [w for index, w in enumerate(words) if index not in skip and not _is_rotated(w)],
-        tolerance=3.0,
-    )
-    for row_index, row in enumerate(rows):
-        for index, word in enumerate(row):
-            # Beschriftungen aus zwei Woertern ("Blatt Nr.") mit beruecksichtigen
-            key = normalize(word[4].rstrip(":"))
-            skip_next = 0
-            if key not in labels and index + 1 < len(row):
-                combined = normalize(f"{word[4]} {row[index + 1][4]}".rstrip(":"))
-                if combined in labels:
-                    key, skip_next = combined, 1
-            field_name = labels.get(key)
-            if not field_name or getattr(metadata, field_name):
-                continue
-            if field_name == "blatt_von" and not metadata.blatt_nr:
-                continue
-            # Wert = folgende Woerter derselben Zeile, bis zum naechsten Label
-            values: list[str] = []
-            previous_right = row[index + skip_next][2]
-            for follower in row[index + 1 + skip_next:]:
-                follower_key = normalize(follower[4].rstrip(":"))
-                if follower_key in labels or follower_key in stop_words:
-                    break
-                if follower[0] - previous_right > 40.0:
-                    break                      # groessere Luecke: anderer Block
-                if word[0] < grid.label_left <= follower[0]:
-                    break                      # ab hier beginnt die Tabelle
-                values.append(follower[4])
-                previous_right = follower[2]
-                if len(" ".join(values)) > 60:
-                    break
-            if not values and is_label_row(row):
-                # Wert in einer der naechsten Zeilen an derselben x-Position suchen
-                right_border = min(
-                    (w[0] for w in row[index + 1 + skip_next:]
-                     if normalize(w[4].rstrip(":")) in labels),
-                    default=float("inf"),
-                )
-                for follower_row in rows[row_index + 1: row_index + 4]:
-                    below = [w for w in follower_row
-                             if word[0] - 6.0 <= w[0] < right_border
-                             and normalize(w[4].rstrip(":")) not in labels
-                             and normalize(w[4].rstrip(":")) not in stop_words]
-                    if not below:
-                        continue
-                    candidate = [w[4] for w in below]
-                    # Eine blosse Zahl unter einer Textbeschriftung ist meist ein
-                    # Revisionsindex o. Ae. - nur bei Blattangaben ist sie gewollt.
-                    if (len(candidate) == 1 and candidate[0].strip().isdigit()
-                            and field_name not in ("blatt_nr", "blatt_von")):
-                        continue
-                    values = candidate
-                    break
-            if values:
-                setattr(metadata, field_name, " ".join(values).strip())
-    return metadata
-
-
-def _extract_footnotes(words: list[Word], header_top: float, skip: set[int]) -> list[Footnote]:
-    """Liest die nummerierten Fussnoten oberhalb des Tabellenkopfs."""
-    candidates = [w for index, w in enumerate(words)
-                  if w[3] <= header_top and index not in skip]
-    rows = _cluster_rows(candidates, tolerance=3.0)
-    footnotes: list[Footnote] = []
-    for row in rows:
-        text = " ".join(w[4] for w in row).strip()
-        for match in re.finditer(r"(?<![\d.,])(\d{1,2})\)\s*", text):
-            marker = match.group(1)
-            start = match.end()
-            next_match = re.search(r"(?<![\d.,])\d{1,2}\)", text[start:])
-            body = text[start:start + next_match.start()] if next_match else text[start:]
-            body = body.strip()
-            if body:
-                footnotes.append(Footnote(marker=marker, text=body))
-    # Mehrfachfunde je Marker zusammenfuehren (Fussnoten laufen ueber mehrere Zeilen)
-    merged: dict[str, Footnote] = {}
-    for footnote in footnotes:
-        if footnote.marker in merged:
-            merged[footnote.marker].text += " " + footnote.text
-        else:
-            merged[footnote.marker] = footnote
-    return [merged[key] for key in sorted(merged, key=lambda m: int(m))]
+    return finder
 
 
 def extract_pdf_text(path: str | Path, page_index: int) -> RawTable | None:
@@ -327,80 +108,12 @@ def extract_pdf_text(path: str | Path, page_index: int) -> RawTable | None:
         page = doc[page_index]
         words: list[Word] = page.get_text("words")
         page_width = page.rect.width
-        page_height = page.rect.height
+        finder = make_table_bottom_finder(page)
 
-    if len(words) < 20:
-        return None
-
-    label_word_ids: set[int] = set()
-    grid = _build_grid(words, page_width, label_word_ids)
-    if grid is None:
-        return None
-
-    xs = [c.x_center for c in grid.columns if c.x_center is not None]
-    pitch = (max(xs) - min(xs)) / max(1, len(xs) - 1)
-    tolerance = max(3.0, pitch * 0.5)
-    right_limit = grid.note_left if grid.note_left else max(xs) + pitch
-
-    body_words = [w for w in words if _cy(w) > grid.body_top]
-    rows: list[DataPointRow] = []
-    for cluster in _cluster_rows(body_words):
-        label_words = [w for w in cluster if _cx(w) < grid.label_left]
-        label = " ".join(w[4] for w in label_words).strip()
-        # Fuehrende Zeilennummer abtrennen
-        row_no = ""
-        parts = label.split(" ", 1)
-        if parts and _INT_RE.match(parts[0]):
-            row_no, label = parts[0], (parts[1] if len(parts) > 1 else "")
-
-        cells: list[Cell] = []
-        for column in grid.columns:
-            if column.x_center is None or column.x_center > right_limit:
-                continue
-            hits = [w for w in cluster if abs(_cx(w) - column.x_center) <= tolerance]
-            if not hits:
-                continue
-            raw = " ".join(w[4] for w in hits).strip()
-            count = parse_count(raw)
-            cells.append(Cell(column_index=column.index, raw_value=raw, count=count,
-                              note="" if count is not None else raw))
-
-        remark = ""
-        if grid.note_left is not None:
-            note_words = [w for w in cluster
-                          if grid.note_left <= _cx(w) and _cx(w) < page_width - 25]
-            remark = " ".join(w[4] for w in note_words).strip()
-            # Rechts wiederholte Zeilennummer nicht als Bemerkung uebernehmen
-            if remark == row_no:
-                remark = ""
-
-        sum_row = is_sum_label(label) or is_sum_label(" ".join(w[4] for w in cluster[:2]))
-        if not label and not cells and not remark:
-            continue
-        rows.append(
-            DataPointRow(
-                row_no=row_no,
-                klartext=label,
-                remark=remark,
-                cells=cells,
-                page_index=page_index,
-                is_sum_row=sum_row,
-                confidence=1.0,
-            )
+        return extract_table_from_words(
+            words, page_width, page_index, ExtractionMode.PDF_TEXT,
+            table_bottom_finder=finder,
         )
-
-    rows = truncate_after_sum(rows)
-
-    table = RawTable(
-        page_index=page_index,
-        mode=ExtractionMode.PDF_TEXT,
-        columns=grid.columns,
-        rows=rows,
-        footnotes=_extract_footnotes(words, header_top=grid.labels_top, skip=label_word_ids),
-        metadata=_extract_metadata(words, grid, label_word_ids),
-        texts=[" ".join(w[4] for w in words)],
-    )
-    return table
 
 
 SCHEMA_KEYWORDS = (
@@ -416,7 +129,7 @@ def classify_page_text(path: str | Path, page_index: int) -> tuple[str, float, s
 
     Rueckgabe: (typ, konfidenz, begruendung) mit typ aus
     {"funktionsliste", "regelschema", "sonstiges", "unbekannt"}.
-    "unbekannt" heisst: bitte das Vision-Modell fragen.
+    "unbekannt" heisst: bitte OCR oder das Vision-Modell fragen.
     """
     import pymupdf
 
@@ -436,7 +149,6 @@ def classify_page_text(path: str | Path, page_index: int) -> tuple[str, float, s
         return "regelschema", 0.85, "Schema-Stichwort in der Textebene gefunden"
     if any(normalize(keyword) in lowered for keyword in TABLE_KEYWORDS):
         return "funktionsliste", 0.7, "Tabellen-Stichwort gefunden, aber kein Abschnitt-/Spalte-Raster"
-    # Viele Vektorpfade bei wenig Text sprechen fuer eine Zeichnung.
     if drawings > 150 and len(words) < 400:
         return "regelschema", 0.7, f"{drawings} Vektorpfade bei nur {len(words)} Woertern"
     return "sonstiges", 0.5, "Kein Tabellenraster erkennbar"

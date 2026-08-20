@@ -306,36 +306,87 @@ with tab_overview:
 
 with tab_costs:
     st.subheader("Kostenschätzung")
-    st.write("Einheitspreise können jederzeit gepflegt werden – auch bevor Daten "
-             "importiert wurden. Die Kosten werden sofort neu berechnet.")
-    with Session(engine) as session:
-        prices = db.get_unit_prices(session)
-    profile_id = st.selectbox("Profil", [p.id for p in load_profiles()])
-    template = price_template(profile_id, prices)
-    edited_prices = st.data_editor(
-        template, width="stretch", hide_index=True, num_rows="fixed",
-        column_config={"einheitspreis": st.column_config.NumberColumn(
-            f"Einheitspreis [{SETTINGS.currency}]", min_value=0.0, step=1.0, format="%.2f")},
-        disabled=["spalte_key", "spalte_adresse", "gruppe", "untergruppe", "spalte"],
-        key=f"prices_{profile_id}", height=420,
-    )
-    if st.button("Einheitspreise speichern", type="primary"):
-        with Session(engine) as session:
-            db.set_unit_prices(session,
-                               dict(zip(edited_prices["spalte_key"], edited_prices["einheitspreis"])),
-                               profile_id=profile_id)
-        st.success("Einheitspreise gespeichert.")
+    st.write("Einheitspreis je Funktionsspalte eintragen – die Kosten werden sofort "
+             "neu berechnet. Gespeicherte Preise gelten auch für den Excel-Export.")
 
     raw = load_raw()
-    if not raw.empty:
-        current = dict(zip(edited_prices["spalte_key"], edited_prices["einheitspreis"]))
-        current = {**prices, **current}
-        priced = apply_prices(aggregate.column_summary(raw), current)
-        st.metric("Geschätzte Gesamtkosten",
-                  f"{total_cost(priced):,.2f} {SETTINGS.currency}".replace(",", "."))
-        st.dataframe(priced[["spalte_adresse", "gruppe", "spalte", "menge",
-                             "einheitspreis", "kosten"]],
-                     width="stretch", hide_index=True)
+    with Session(engine) as session:
+        gespeicherte_preise = db.get_unit_prices(session)
+    summary = aggregate.column_summary(raw)
+
+    alle_spalten = st.checkbox(
+        "Alle Spalten des Profils anzeigen (auch ohne Mengen)",
+        value=summary.empty,
+        help="Damit lassen sich Einheitspreise schon vor dem Import hinterlegen.",
+    )
+
+    if alle_spalten:
+        profile_ids = [p.id for p in load_profiles()]
+        profile_id = st.selectbox("Profil", profile_ids)
+        basis = price_template(profile_id, gespeicherte_preise)
+        mengen = dict(zip(summary["spalte_key"], summary["menge"])) if not summary.empty else {}
+        basis["menge"] = [float(mengen.get(key, 0.0)) for key in basis["spalte_key"]]
+        basis = basis[["spalte_adresse", "gruppe", "untergruppe", "spalte",
+                       "spalte_key", "menge", "einheitspreis"]]
+    elif summary.empty:
+        st.info("Noch keine Daten importiert – bitte oben „Alle Spalten des Profils anzeigen“ "
+                "aktivieren, um Preise vorab zu pflegen.")
+        basis = None
+    else:
+        # Nur die Spalten, in denen tatsächlich Mengen stecken
+        basis = summary[["spalte_adresse", "gruppe", "untergruppe", "spalte",
+                         "spalte_key", "menge"]].copy()
+        basis["einheitspreis"] = [float(gespeicherte_preise.get(key, 0.0))
+                                  for key in basis["spalte_key"]]
+
+    if basis is not None:
+        bearbeitet = st.data_editor(
+            basis,
+            width="stretch", hide_index=True, num_rows="fixed", height=420,
+            key="preis_editor",
+            column_config={
+                "spalte_adresse": st.column_config.TextColumn("Abschnitt.Spalte"),
+                "gruppe": st.column_config.TextColumn("Gruppe"),
+                "untergruppe": st.column_config.TextColumn("Untergruppe"),
+                "spalte": st.column_config.TextColumn("Funktionsspalte"),
+                "spalte_key": st.column_config.TextColumn("Schlüssel"),
+                "menge": st.column_config.NumberColumn("Menge", format="%.0f"),
+                "einheitspreis": st.column_config.NumberColumn(
+                    f"Einheitspreis [{SETTINGS.currency}]", min_value=0.0, step=1.0, format="%.2f"),
+            },
+            disabled=["spalte_adresse", "gruppe", "untergruppe", "spalte", "spalte_key", "menge"],
+        )
+
+        # Berechnung direkt aus den eingegebenen Werten - unabhaengig davon,
+        # ob die Preise schon gespeichert wurden.
+        eingegebene_preise = {
+            str(key): float(value or 0.0)
+            for key, value in zip(bearbeitet["spalte_key"], bearbeitet["einheitspreis"])
+        }
+        ergebnis = apply_prices(summary, {**gespeicherte_preise, **eingegebene_preise}) \
+            if not summary.empty else bearbeitet.assign(kosten=0.0)
+
+        kennzahlen = st.columns(3)
+        kennzahlen[0].metric("Funktionen gesamt",
+                             f"{summary['menge'].sum():g}" if not summary.empty else "0")
+        kennzahlen[1].metric("Spalten mit Einheitspreis",
+                             sum(1 for value in eingegebene_preise.values() if value > 0))
+        kennzahlen[2].metric("Geschätzte Gesamtkosten",
+                             f"{total_cost(ergebnis):,.2f} {SETTINGS.currency}"
+                             .replace(",", "X").replace(".", ",").replace("X", "."))
+
+        if not summary.empty:
+            anzeige = ergebnis[ergebnis["kosten"] > 0] if (ergebnis["kosten"] > 0).any() else ergebnis
+            st.dataframe(
+                anzeige[["spalte_adresse", "gruppe", "spalte", "menge", "einheitspreis", "kosten"]],
+                width="stretch", hide_index=True,
+            )
+
+        if st.button("Einheitspreise speichern", type="primary"):
+            with Session(engine) as session:
+                db.set_unit_prices(session, eingegebene_preise)
+            st.success(f"{len(eingegebene_preise)} Einheitspreis(e) gespeichert – "
+                       "sie werden auch in den Excel-Export übernommen.")
 
 
 # --------------------------------------------------------------------------
@@ -359,6 +410,8 @@ with tab_export:
                     footnotes=aggregate.footnotes_frame(session),
                     prices=db.get_unit_prices(session),
                     projects=aggregate.pivot_projects(raw),
+                    layouts={profile_id: aggregate.vdi_layout_frame(session, profile_id)
+                             for profile_id in aggregate.profiles_in_use(session)},
                 )
             st.success(f"Geschrieben: {path}")
             st.download_button("Datei herunterladen", data=Path(path).read_bytes(),

@@ -12,6 +12,17 @@ from enum import Enum
 from typing import Any
 
 
+class RowKind(str, Enum):
+    """Art einer Tabellenzeile - entscheidet, ob sie gezaehlt wird."""
+
+    DATEN = "daten"              # echter Datenpunkt -> wird gezaehlt
+    LEER = "leer"                # keine Beschriftung, keine Werte
+    SUMME = "summe"              # Summen-/Zwischensummenzeile
+    UEBERTRAG = "uebertrag"      # Uebertrag von/auf ein anderes Blatt
+    FUSSBEREICH = "fussbereich"  # Zeile unterhalb der Tabelle
+    KOPF = "kopf"                # wiederholte Kopfzeile
+
+
 class PageKind(str, Enum):
     """Ergebnis der Seitenklassifikation."""
 
@@ -99,9 +110,24 @@ class DataPointRow:
     remark: str = ""
     cells: list[Cell] = field(default_factory=list)
     page_index: int = 0
-    is_sum_row: bool = False
+    kind: RowKind = RowKind.DATEN
+    exclusion_reason: str = ""
     confidence: float = 0.0
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def is_sum_row(self) -> bool:
+        """Summen- und Uebertragszeilen dienen nur der Kontrolle."""
+        return self.kind in (RowKind.SUMME, RowKind.UEBERTRAG)
+
+    @property
+    def has_values(self) -> bool:
+        return any(cell.count is not None for cell in self.cells)
+
+    @property
+    def is_countable(self) -> bool:
+        """Nur echte Datenpunkte mit mindestens einem Wert werden gezaehlt."""
+        return self.kind is RowKind.DATEN and self.has_values
 
     def value(self, column_index: int) -> float | None:
         for cell in self.cells:
@@ -181,7 +207,16 @@ class DocumentResult:
     # ---------------- Auswertung ----------------
 
     def data_rows(self) -> list[DataPointRow]:
-        return [r for r in self.rows if not r.is_sum_row]
+        """Zeilen, die als Datenpunkte gelten (ohne Summen, Uebertraege, Leerzeilen)."""
+        return [r for r in self.rows if r.kind is RowKind.DATEN]
+
+    def counted_rows(self) -> list[DataPointRow]:
+        """Zeilen, die tatsaechlich in die Summen eingehen."""
+        return [r for r in self.rows if r.is_countable]
+
+    def excluded_rows(self) -> list[DataPointRow]:
+        """Nicht gezaehlte Zeilen inkl. Begruendung - fuer den Pruefbericht."""
+        return [r for r in self.rows if r.kind is not RowKind.DATEN]
 
     def column_by_index(self, index: int) -> ColumnHeader | None:
         for col in self.columns:
@@ -190,9 +225,9 @@ class DocumentResult:
         return None
 
     def totals(self) -> dict[int, float]:
-        """Eigene Spaltensummen ueber alle Datenzeilen (ohne Summenzeile)."""
+        """Eigene Spaltensummen - ausschliesslich ueber echte Datenpunkte."""
         totals: dict[int, float] = {}
-        for row in self.data_rows():
+        for row in self.counted_rows():
             for cell in row.cells:
                 if cell.count is not None:
                     totals[cell.column_index] = totals.get(cell.column_index, 0.0) + cell.count

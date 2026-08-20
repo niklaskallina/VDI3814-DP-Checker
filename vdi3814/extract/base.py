@@ -30,7 +30,7 @@ class RawTable:
 
     @property
     def has_data(self) -> bool:
-        return bool(self.columns) and any(not r.is_sum_row for r in self.rows)
+        return bool(self.columns) and any(r.is_countable for r in self.rows)
 
 
 # --------------------------------------------------------------------------
@@ -125,17 +125,20 @@ def sections_by_position(column_numbers: list[str], column_xs: list[float],
     return result
 
 
-def truncate_after_sum(rows: list) -> list:
-    """Schneidet alles nach der Summenzeile ab.
+def drop_after_footer(rows: list) -> list:
+    """Schneidet ab der ersten Zeile des Fussbereichs alles weg.
 
-    Unterhalb der Tabelle folgt der Fussbereich (Ausgabedatum, Revisionen,
-    Planersteller ...). Diese Zeilen sind keine Datenpunkte und wuerden die
-    Aggregation verfaelschen.
+    Rueckfallebene fuer Seiten ohne gezeichneten Tabellenrahmen. Summen- und
+    Uebertragszeilen bleiben erhalten - sie werden nicht gezaehlt, dienen aber
+    der Kontrolle. Nachlaufende Leerzeilen werden verworfen.
     """
-    for index, row in enumerate(rows):
-        if getattr(row, "is_sum_row", False):
-            return rows[: index + 1]
-    # Ohne Summenzeile: nachlaufende Zeilen ohne Nummer und ohne Werte verwerfen
-    while rows and not rows[-1].row_no and not rows[-1].cells:
-        rows.pop()
-    return rows
+    from ..models import RowKind
+
+    result = []
+    for row in rows:
+        if getattr(row, "kind", RowKind.DATEN) in (RowKind.FUSSBEREICH, RowKind.KOPF):
+            break
+        result.append(row)
+    while result and getattr(result[-1], "kind", None) is RowKind.LEER:
+        result.pop()
+    return result
