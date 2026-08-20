@@ -150,3 +150,31 @@ def test_bildseite_ohne_modell_meldet_verstaendlich(tmp_path):
     assert result.columns == []
     assert any("Vision-Modell" in w or "Funktionsliste" in w for w in result.warnings)
     assert result.pages[0].classification.kind.value == "fehler"
+
+
+def test_fussbereich_mit_werten_unter_der_beschriftung(tmp_path):
+    """Im Fussbereich stehen Projekt/Planersteller unter, nicht neben der Beschriftung."""
+    import pymupdf
+
+    path = tmp_path / "fuss.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=842, height=595)
+    page.insert_text((40, 400), "Ausgabedatum", fontsize=7)
+    page.insert_text((160, 400), "Planersteller", fontsize=7)
+    page.insert_text((320, 400), "Projekt", fontsize=7)
+    page.insert_text((40, 412), "2024-11-02", fontsize=7)
+    page.insert_text((160, 412), "IPG Ingenieur-Planung", fontsize=7)
+    page.insert_text((320, 412), "Mehrzweckhalle Tralau", fontsize=7)
+    document.save(path)
+    document.close()
+
+    from vdi3814.extract.pdftext_extractor import _cluster_rows, _extract_metadata, _HeaderGrid
+
+    with pymupdf.open(path) as opened:
+        words = opened[0].get_text("words")
+    grid = _HeaderGrid(columns=[], body_top=0.0, label_left=800.0, note_left=None)
+    metadata = _extract_metadata(words, grid, skip=set())
+
+    assert metadata.planersteller == "IPG Ingenieur-Planung"
+    assert metadata.projekt == "Mehrzweckhalle Tralau"
+    assert metadata.datum == "2024-11-02"

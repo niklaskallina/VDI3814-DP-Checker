@@ -220,11 +220,20 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
     stop_words = {"name", "geprueft", "inhalt", "index", "rev", "blatt", "datei",
                   "asp", "seite", "stand"}
     metadata = DocumentMetadata()
+
+    def is_label_row(row: list[Word]) -> bool:
+        """Fussbereichs-Beschriftungszeile ('Ausgabedatum | Name | Planersteller | ...').
+
+        Dort stehen die Werte UNTER der Beschriftung, nicht daneben.
+        """
+        hits = sum(1 for w in row if normalize(w[4].rstrip(":")) in labels)
+        return hits >= 2
+
     rows = _cluster_rows(
         [w for index, w in enumerate(words) if index not in skip and not _is_rotated(w)],
         tolerance=3.0,
     )
-    for row in rows:
+    for row_index, row in enumerate(rows):
         for index, word in enumerate(row):
             # Beschriftungen aus zwei Woertern ("Blatt Nr.") mit beruecksichtigen
             key = normalize(word[4].rstrip(":"))
@@ -252,6 +261,28 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
                 values.append(follower[4])
                 previous_right = follower[2]
                 if len(" ".join(values)) > 60:
+                    break
+            if not values and is_label_row(row):
+                # Wert in einer der naechsten Zeilen an derselben x-Position suchen
+                right_border = min(
+                    (w[0] for w in row[index + 1 + skip_next:]
+                     if normalize(w[4].rstrip(":")) in labels),
+                    default=float("inf"),
+                )
+                for follower_row in rows[row_index + 1: row_index + 4]:
+                    below = [w for w in follower_row
+                             if word[0] - 6.0 <= w[0] < right_border
+                             and normalize(w[4].rstrip(":")) not in labels
+                             and normalize(w[4].rstrip(":")) not in stop_words]
+                    if not below:
+                        continue
+                    candidate = [w[4] for w in below]
+                    # Eine blosse Zahl unter einer Textbeschriftung ist meist ein
+                    # Revisionsindex o. Ae. - nur bei Blattangaben ist sie gewollt.
+                    if (len(candidate) == 1 and candidate[0].strip().isdigit()
+                            and field_name not in ("blatt_nr", "blatt_von")):
+                        continue
+                    values = candidate
                     break
             if values:
                 setattr(metadata, field_name, " ".join(values).strip())
