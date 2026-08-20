@@ -18,6 +18,13 @@ mitgelieferten Texterkennung. Projektdaten verlassen das Gerät nicht.
 3. Programm über das Startmenü starten; die Oberfläche öffnet sich im Browser und
    läuft ausschließlich lokal
 
+Die Setup-Datei kann unverändert an Kolleginnen und Kollegen weitergegeben werden –
+sie enthält alles Nötige.
+
+*Neue Fassung erzeugen:* Reiter **Actions → „Windows-EXE bauen" → „Run workflow"**,
+dort den Haken „Ergebnis als Release veroeffentlichen" setzen und eine Versionsnummer
+angeben. Der Build erstellt Setup und ZIP und veröffentlicht beides.
+
 Es muss **nichts weiter installiert** werden – weder Python noch Texterkennung noch
 ein KI-Modell. Wer nichts installieren möchte, nimmt stattdessen die ZIP-Datei,
 entpackt sie und startet `VDI3814-DP-Checker.exe`.
