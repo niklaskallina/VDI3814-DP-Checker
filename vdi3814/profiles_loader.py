@@ -94,6 +94,26 @@ class Profile:
                 return col
         return None
 
+    def blocks(self) -> list[tuple[str, list[ProfileColumn]]]:
+        """Spalten nach Abschnitten gruppiert, in Reihenfolge der Vorlage."""
+        gruppen: list[tuple[str, list[ProfileColumn]]] = []
+        for column in self.columns:
+            abschnitt = column.address.rpartition(".")[0] or column.address
+            if gruppen and gruppen[-1][0] == abschnitt:
+                gruppen[-1][1].append(column)
+            else:
+                gruppen.append((abschnitt, [column]))
+        return gruppen
+
+    def block_sizes(self) -> list[int]:
+        """Fingerabdruck der Vorlage, z. B. [5, 5, 6, 5, 8, 13, 4, 4].
+
+        Bei Scans sind die Nummernzeilen oft nur teilweise lesbar. Die Groessen
+        der Abschnittsbloecke sind dagegen aus den Trennlinien ablesbar und
+        identifizieren die Fassung eindeutig.
+        """
+        return [len(spalten) for _, spalten in self.blocks()]
+
     def column_by_address(self, address: str) -> ProfileColumn | None:
         wanted = normalize_address(address)
         if not wanted:
@@ -182,6 +202,18 @@ def detect_profile(texts: Iterable[str]) -> tuple[Profile | None, float, dict[st
     if best is None or scores[best_id] < best.min_score:
         return None, scores[best_id], scores
     return best, scores[best_id], scores
+
+
+def profile_by_block_sizes(sizes: list[int]) -> Profile | None:
+    """Findet das Profil, dessen Abschnittsbloecke genau so aufgebaut sind."""
+    if not sizes:
+        return None
+    for profile in load_profiles():
+        if profile.block_sizes() == sizes:
+            return profile
+    # Zweite Chance: gleiche Gesamtzahl an Spalten
+    passende = [p for p in load_profiles() if len(p.columns) == sum(sizes)]
+    return passende[0] if len(passende) == 1 else None
 
 
 def match_columns(headers: list[ColumnHeader], profile: Profile) -> list[ColumnHeader]:

@@ -12,7 +12,8 @@ from ..textutil import normalize, normalize_address
 class ExtractionMode(str, Enum):
     EXCEL = "excel"
     PDF_TEXT = "pdf_text"
-    VISION = "vision"
+    OCR = "ocr"            # Scan, lokal per Tesseract gelesen (ohne KI)
+    VISION = "vision"      # nur wenn ausdruecklich ein lokales Modell gewuenscht ist
 
 
 @dataclass

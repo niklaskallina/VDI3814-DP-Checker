@@ -98,12 +98,34 @@ def _cy(word: Word) -> float:
 
 
 
-def _find_label_word(words: list[Word], *labels: str) -> Word | None:
+def _find_label_words(words: list[Word], *labels: str) -> list[Word]:
+    """Alle Woerter, die einer der Beschriftungen entsprechen."""
     wanted = {normalize(label) for label in labels}
-    for word in words:
-        if normalize(word[4]) in wanted:
-            return word
-    return None
+    return [word for word in words if normalize(word[4]) in wanted]
+
+
+def _find_label_word(words: list[Word], *labels: str) -> Word | None:
+    treffer = _find_label_words(words, *labels)
+    return treffer[0] if treffer else None
+
+
+def _number_row_anchor(words: list[Word], candidates: list[Word],
+                       mindestanzahl: int = 4, muster=None) -> Word | None:
+    """Waehlt die Beschriftung aus, hinter der wirklich eine Nummernzeile steht.
+
+    "Abschnitt" und "Spalte" kommen auf einer Funktionsliste mehrfach vor -
+    etwa im Anmerkungstext ("... Zeile Nr., Abschnitt Nr., Spalte Nr. ..."").
+    Massgeblich ist die Fundstelle, rechts von der die meisten Zahlen stehen.
+    """
+    muster = muster or _INT_RE
+    bester, beste_anzahl = None, 0
+    for kandidat in candidates:
+        band = _band(words, kandidat)
+        anzahl = sum(1 for w in band
+                     if _cx(w) > _cx(kandidat) and muster.match(w[4].strip()))
+        if anzahl > beste_anzahl:
+            bester, beste_anzahl = kandidat, anzahl
+    return bester if beste_anzahl >= mindestanzahl else None
 
 
 
@@ -160,17 +182,81 @@ def _rotated_labels(words: list[Word], columns: list[ColumnHeader], header_botto
 
 
 
+def _detect_number_row(words: list[Word]) -> list[Word] | None:
+    """Findet die Zeile mit den Spaltennummern ohne die Beschriftung "Spalte".
+
+    Notwendig bei Scans: im engen Tabellenkopf wird das Wort "Spalte" oft nicht
+    erkannt, die Nummernzeile selbst dagegen schon. Sie ist eindeutig an ihrer
+    Gestalt zu erkennen - viele kleine Zahlen nebeneinander, die mehrfach
+    wieder bei 1 beginnen (je Abschnitt).
+    """
+    hoehen = sorted(w[3] - w[1] for w in words)
+    zeilenhoehe = hoehen[len(hoehen) // 2] if hoehen else 10.0
+    beste, bester_wert = None, 0
+
+    for cluster in _cluster_rows(words, tolerance=max(2.0, zeilenhoehe * 0.6)):
+        zahlen = [w for w in cluster if _INT_RE.match(w[4].strip())]
+        if len(zahlen) < 8 or len(zahlen) < len(cluster) * 0.6:
+            continue
+        werte = [int(w[4]) for w in sorted(zahlen, key=_cx)]
+        if max(werte) > 30:
+            continue                      # das sind eher Messwerte als Spaltennummern
+        neustarts = sum(1 for wert in werte if wert == 1)
+        aufsteigend = sum(1 for a, b in zip(werte, werte[1:]) if b == a + 1 or b == 1)
+        bewertung = len(zahlen) + neustarts * 2 + aufsteigend
+        if aufsteigend < len(werte) * 0.7:
+            continue                      # keine fortlaufende Nummerierung
+        if bewertung > bester_wert:
+            beste, bester_wert = zahlen, bewertung
+    return beste
+
+
+def _detect_section_row(words: list[Word], number_row: list[Word]) -> list[Word]:
+    """Abschnittsnummern: die Zeile mit Adressen direkt ueber der Nummernzeile."""
+    oberkante = min(w[1] for w in number_row)
+    hoehe = max(w[3] - w[1] for w in number_row)
+    kandidaten = [w for w in words
+                  if oberkante - hoehe * 4 <= _cy(w) < oberkante
+                  and _ADDR_RE.match(w[4].strip())]
+    if not kandidaten:
+        return []
+    # Nur die unterste dieser Zeilen verwenden
+    unterste = max(_cy(w) for w in kandidaten)
+    return [w for w in kandidaten if abs(_cy(w) - unterste) <= hoehe]
+
+
 def _build_grid(words: list[Word], page_width: float, used: set[int]) -> _HeaderGrid | None:
-    section_anchor = _find_label_word(words, "Abschnitt")
-    column_anchor = _find_label_word(words, "Spalte")
-    if section_anchor is None or column_anchor is None:
-        return None
+    # 1. Weg: ueber die Beschriftungen "Spalte" und "Abschnitt"
+    column_anchor = _number_row_anchor(words, _find_label_words(words, "Spalte"))
+    section_anchor = None
+    if column_anchor is not None:
+        abschnitt_kandidaten = [
+            w for w in _find_label_words(words, "Abschnitt") if _cy(w) < _cy(column_anchor)
+        ]
+        # In der neuen Fassung stehen dort Adressen wie "1.1." statt blosser Zahlen.
+        section_anchor = _number_row_anchor(words, abschnitt_kandidaten,
+                                            mindestanzahl=2, muster=_ADDR_RE)
 
-    section_band = [w for w in _band(words, section_anchor) if _cx(w) > _cx(section_anchor)]
-    column_band = [w for w in _band(words, column_anchor) if _cx(w) > _cx(column_anchor)]
+    if column_anchor is not None and section_anchor is not None:
+        section_band = [w for w in _band(words, section_anchor) if _cx(w) > _cx(section_anchor)]
+        column_band = [w for w in _band(words, column_anchor) if _cx(w) > _cx(column_anchor)]
+        column_words = [w for w in column_band if _INT_RE.match(w[4].strip())]
+        sections = [(_cx(w), normalize_address(w[4])) for w in section_band
+                    if _ADDR_RE.match(w[4].strip())]
+        kopf_unterkante = min(_cy(section_anchor), _cy(column_anchor))
+        kopf_oberkante = max(_cy(section_anchor), _cy(column_anchor))
+    else:
+        # 2. Weg: die Nummernzeile selbst suchen (z. B. bei Scans, wenn die
+        # Beschriftung im engen Tabellenkopf nicht gelesen werden konnte)
+        column_words = _detect_number_row(words) or []
+        if len(column_words) < 4:
+            return None
+        section_words = _detect_section_row(words, column_words)
+        sections = [(_cx(w), normalize_address(w[4])) for w in section_words]
+        kopf_unterkante = min(_cy(w) for w in (section_words or column_words))
+        kopf_oberkante = max(_cy(w) for w in column_words)
 
-    sections = [(_cx(w), normalize_address(w[4])) for w in section_band if _ADDR_RE.match(w[4].strip())]
-    column_words = [w for w in column_band if _INT_RE.match(w[4].strip())]
+    column_words = sorted(column_words, key=_cx)
     if len(column_words) < 4:
         return None
 
@@ -191,7 +277,7 @@ def _build_grid(words: list[Word], page_width: float, used: set[int]) -> _Header
 
     xs = [c.x_center for c in columns if c.x_center is not None]
     pitch = (max(xs) - min(xs)) / max(1, len(xs) - 1)
-    header_bottom = min(_cy(section_anchor), _cy(column_anchor)) - LABEL_ROW_TOLERANCE
+    header_bottom = kopf_unterkante - LABEL_ROW_TOLERANCE
     labels_top = _rotated_labels(words, columns, header_bottom, pitch, used)
 
     note_anchor = _find_label_word(words, "Bemerkung", "Bemerkungen", "Bemerkungen und Referenzierungen")
@@ -209,7 +295,7 @@ def _build_grid(words: list[Word], page_width: float, used: set[int]) -> _Header
 
     return _HeaderGrid(
         columns=columns,
-        body_top=max(_cy(section_anchor), _cy(column_anchor)) + LABEL_ROW_TOLERANCE,
+        body_top=kopf_oberkante + LABEL_ROW_TOLERANCE,
         label_left=min(xs) - pitch * 0.6,
         note_left=note_left,
         labels_top=labels_top,
@@ -375,7 +461,9 @@ def _extract_footnotes(words: list[Word], header_top: float, skip: set[int]) -> 
 
 def extract_table_from_words(words: list[Word], page_width: float, page_index: int,
                              mode: ExtractionMode,
-                             table_bottom_finder=None) -> RawTable | None:
+                             table_bottom_finder=None,
+                             grid: "_HeaderGrid | None" = None,
+                             table_bottom: float | None = None) -> RawTable | None:
     """Rekonstruiert die Funktionsliste aus Woertern mit Koordinaten.
 
     table_bottom_finder: optionale Funktion
@@ -384,11 +472,13 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
     kann (bei PDFs aus den gezeichneten Spaltentrennern, bei Scans aus den
     erkannten Tabellenlinien). Ohne sie greifen die Schlagwortregeln.
     """
-    if len(words) < 20:
+    # Ohne vorgegebenes Raster braucht es genug Woerter, um es zu finden.
+    if len(words) < (5 if grid is not None else 20):
         return None
 
     label_word_ids: set[int] = set()
-    grid = _build_grid(words, page_width, label_word_ids)
+    if grid is None:
+        grid = _build_grid(words, page_width, label_word_ids)
     if grid is None:
         return None
 
@@ -402,8 +492,8 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
     row_pitch = _row_pitch(_cluster_rows(body_words))
     row_tolerance = max(pitch * 0.2, row_pitch * 0.35) if row_pitch else ROW_TOLERANCE
 
-    bottom = None
-    if table_bottom_finder is not None:
+    bottom = table_bottom
+    if bottom is None and table_bottom_finder is not None:
         bottom = table_bottom_finder(grid.body_top, min(xs), max(xs), pitch, row_pitch)
 
     warnings: list[str] = []

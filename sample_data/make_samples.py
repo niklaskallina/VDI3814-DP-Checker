@@ -75,16 +75,34 @@ def _draw_list(page, profile, rows, meta, footnotes, title):
         number = column.address.rsplit(".", 1)[1]
         x = grid_left + index * CELL_WIDTH
         section_starts.setdefault(section, []).append(x)
-        _text(page, x + 2, column_row_y, number, size=6.0)
+        _text(page, x + CELL_WIDTH / 2 - 1.6, column_row_y, number, size=6.0)
     for section, positions in section_starts.items():
         centre = (positions[0] + positions[-1]) / 2
         _text(page, centre, section_row_y, section, size=6.0)
 
     if note_column is not None:
-        note_x = grid_left + len(columns) * CELL_WIDTH + 12
-        _text(page, note_x, column_row_y, "Bemerkung", size=6.0)
-    else:                                     # pragma: no cover
-        note_x = None
+        _text(page, grid_left + len(columns) * CELL_WIDTH + 14, column_row_y, "Bemerkung", size=6.0)
+
+    # --- Tabellenraster zeichnen (wie in der Vorlage) ---
+    grid_right = grid_left + len(columns) * CELL_WIDTH
+    note_x = grid_right + 12 if note_column is not None else grid_right
+    body_top = column_row_y + 4
+    body_bottom = body_top + (len(rows) + 1) * ROW_HEIGHT
+    shape = page.new_shape()
+    # Spaltentrenner beginnen wie in der Vorlage an der Nummernzeile "Spalte"
+    trenner_oben = column_row_y - 9
+    for index in range(len(columns) + 1):
+        x = grid_left + index * CELL_WIDTH
+        shape.draw_line(pymupdf.Point(x, trenner_oben), pymupdf.Point(x, body_bottom))
+    shape.draw_line(pymupdf.Point(LEFT - 2, trenner_oben), pymupdf.Point(LEFT - 2, body_bottom))
+    shape.draw_line(pymupdf.Point(note_x + 90, trenner_oben), pymupdf.Point(note_x + 90, body_bottom))
+    for index in range(len(rows) + 2):
+        y_linie = body_top + index * ROW_HEIGHT
+        shape.draw_line(pymupdf.Point(LEFT - 2, y_linie), pymupdf.Point(note_x + 90, y_linie))
+    shape.draw_line(pymupdf.Point(LEFT - 2, section_row_y - 8), pymupdf.Point(note_x + 90, section_row_y - 8))
+    shape.draw_line(pymupdf.Point(LEFT - 2, column_row_y - 9), pymupdf.Point(note_x + 90, column_row_y - 9))
+    shape.finish(width=0.8, color=(0, 0, 0))
+    shape.commit()
 
     # --- Datenzeilen ---
     y = column_row_y + ROW_HEIGHT
@@ -94,18 +112,18 @@ def _draw_list(page, profile, rows, meta, footnotes, title):
         _text(page, LEFT + 12, y, label, size=6.5)
         for address, value in values.items():
             index = next(i for i, c in enumerate(columns) if c.address == address)
-            _text(page, grid_left + index * CELL_WIDTH + 3, y, value, size=6.0)
+            # mittig in der Zelle, wie in der Vorlage
+            _text(page, grid_left + index * CELL_WIDTH + CELL_WIDTH / 2 - 1.6, y, value, size=6.0)
             totals[address] = totals.get(address, 0.0) + float(value)
-        if remark and note_x:
-            _text(page, note_x, y, remark, size=5.5)
+        if remark and note_column is not None:
+            _text(page, note_x + 2, y, remark, size=5.0)
         y += ROW_HEIGHT
 
     # --- Summenzeile ---
-    y += 6
     _text(page, LEFT + 12, y, "Summe Funktionen", size=6.5)
     for address, total in totals.items():
         index = next(i for i, c in enumerate(columns) if c.address == address)
-        _text(page, grid_left + index * CELL_WIDTH + 3, y, f"{total:g}", size=6.0)
+        _text(page, grid_left + index * CELL_WIDTH + CELL_WIDTH / 2 - 1.6, y, f"{total:g}", size=6.0)
 
     # --- Fussbereich ---
     y += 24

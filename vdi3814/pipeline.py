@@ -19,6 +19,8 @@ from typing import Callable, Iterable
 
 from .config import SETTINGS
 from .extract import extract_excel, extract_pdf_text, is_excel, pdf_has_text_layer
+from .extract.ocr_extractor import available as ocr_available
+from .extract.ocr_extractor import classify_image, extract_ocr
 from .extract.pdftext_extractor import classify_page_text
 from .extract.base import ExtractionMode, RawTable
 from .extract.vision_extractor import classify_page, extract_vision
@@ -207,13 +209,54 @@ def _process_pdf(path: Path, backend, settings, progress: ProgressCallback) -> t
     return tables, pages
 
 
+_KIND_BY_NAME = {
+    "funktionsliste": PageKind.FUNKTIONSLISTE,
+    "regelschema": PageKind.SCHEMA,
+    "sonstiges": PageKind.SONSTIGES,
+}
+
+
 def _process_image(image, page_index: int, backend, settings, progress: ProgressCallback,
                    label: str) -> tuple[RawTable | None, PageResult]:
+    """Wertet eine Bildseite aus - zuerst mit lokalem OCR, ohne KI.
+
+    Reihenfolge:
+    1. OCR-Klassifikation: Funktionsliste oder Regelschema?
+    2. Zelle-fuer-Zelle-OCR entlang des erkannten Tabellenrasters
+    3. nur falls das misslingt und ausdruecklich gewuenscht: lokales Vision-Modell
+    """
+    if ocr_available():
+        art, sicherheit, begruendung = classify_image(image)
+        if art == "regelschema" and sicherheit >= 0.7:
+            progress(f"{label}: uebersprungen (Regelschema)")
+            return None, PageResult(
+                page_index=page_index,
+                classification=PageClassification(PageKind.SCHEMA, sicherheit, begruendung))
+
+        progress(f"{label}: Seite wird per OCR gelesen (kein Modell noetig)")
+        table = extract_ocr(image, page_index)
+        if table is not None and table.columns:
+            return table, PageResult(
+                page_index=page_index,
+                classification=PageClassification(PageKind.FUNKTIONSLISTE, 0.9,
+                                                  "Tabellenraster im Scan vermessen"))
+        if backend is None:
+            grund = ("Im Scan wurde kein Abschnitt-/Spalte-Raster gefunden. "
+                     f"Klassifikation: {art} ({begruendung}).")
+            kind = _KIND_BY_NAME.get(art, PageKind.SONSTIGES)
+            if kind is PageKind.FUNKTIONSLISTE:
+                kind = PageKind.FEHLER
+            progress(f"{label}: nicht auswertbar ({art})")
+            return None, PageResult(page_index=page_index,
+                                    classification=PageClassification(kind, sicherheit, grund))
+
     if backend is None:
-        return None, PageResult(page_index=page_index,
-                                classification=PageClassification(
-                                    PageKind.FEHLER, 0.0,
-                                    "Kein Vision-Modell verfuegbar - Bildseite konnte nicht ausgewertet werden"))
+        return None, PageResult(
+            page_index=page_index,
+            classification=PageClassification(
+                PageKind.FEHLER, 0.0,
+                "Bildseite konnte nicht ausgewertet werden: OCR ist nicht eingerichtet "
+                "und es wurde kein Vision-Modell aktiviert."))
 
     classification = classify_page(backend, image)
     if not classification.is_table:
