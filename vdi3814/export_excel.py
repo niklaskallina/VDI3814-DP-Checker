@@ -2,6 +2,8 @@
 
 Blaetter:
     Übersicht       - Summen je Funktionsspalte ueber alle importierten Listen
+    Schwerpunkte    - Datenpunkte und Funktionen je ASP/ISP ueber alle Listen
+    Mengen je Schwerpunkt - dieselbe Sicht im Aufbau der VDI-Funktionsliste
     Kostenschätzung - Einheitspreis je Spalte, Menge per Formel aus "Übersicht",
                       Kosten = Menge * Einheitspreis, Gesamtsumme per SUM()
     Prüfung         - Abgleich mit der Zeile "Summe Funktionen" und alle bewusst
@@ -154,7 +156,9 @@ def export_workbook(path: str | Path,
                     currency: str | None = None,
                     layouts: dict[str, pd.DataFrame] | None = None,
                     pruefung: pd.DataFrame | None = None,
-                    matrizen: dict[str, pd.DataFrame] | None = None) -> Path:
+                    matrizen: dict[str, pd.DataFrame] | None = None,
+                    schwerpunkte: pd.DataFrame | None = None,
+                    schwerpunkt_matrizen: dict[str, pd.DataFrame] | None = None) -> Path:
     """Schreibt die vollstaendige Auswertung als .xlsx."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +180,19 @@ def export_workbook(path: str | Path,
             continue
         titel = (f"Übersicht {profile.fassung}" if mehrere else "Übersicht")[:31]
         bezuege.update(_sheet_uebersicht_vdi(workbook, titel, profile, matrix, prices, currency))
+
+    # Danach die Zuordnung zu den Automations-/Informationsschwerpunkten:
+    # welcher ASP/ISP traegt wie viele Datenpunkte und Funktionen?
+    if schwerpunkte is not None and not schwerpunkte.empty:
+        _sheet_schwerpunkte(workbook, schwerpunkte)
+    mehrere_sp = len(schwerpunkt_matrizen or {}) > 1
+    for profile_id, matrix in (schwerpunkt_matrizen or {}).items():
+        profile = get_profile(profile_id)
+        if profile is None or matrix is None or matrix.empty:
+            continue
+        titel = (f"Mengen je Schwerpunkt {profile.fassung}" if mehrere_sp
+                 else "Mengen je Schwerpunkt")[:31]
+        _sheet_schwerpunkt_matrix(workbook, titel, profile, matrix)
 
     # Danach die Funktionslisten im Original-Layout - dort stehen die einzelnen
     # Datenpunkte, auf denen die Mengen beruhen.
@@ -203,6 +220,9 @@ def export_workbook(path: str | Path,
     info.append(["Dateien", int(documents.shape[0]) if not documents.empty else 0])
     info.append(["Datenpunkte", int(raw["datenpunkt"].nunique()) if not raw.empty else 0])
     info.append(["Funktionen gesamt", float(summary["menge"].sum()) if not summary.empty else 0.0])
+    info.append(["Schwerpunkte (ASP/ISP)",
+                 int(schwerpunkte.shape[0]) if schwerpunkte is not None
+                 and not schwerpunkte.empty else 0])
     info.append([])
     info.append(["Hinweis", "Mengen und Kosten sind Formeln - Einheitspreise koennen "
                             "direkt in 'Kostenschaetzung' geaendert werden."])
@@ -214,10 +234,106 @@ def export_workbook(path: str | Path,
 
 
 # --------------------------------------------------------------------------
+# Blaetter zu den Automations-/Informationsschwerpunkten
+# --------------------------------------------------------------------------
+
+def _sheet_schwerpunkte(workbook: Workbook, frame: pd.DataFrame) -> None:
+    """Flache Uebersicht: was entfaellt auf welchen ASP/ISP?
+
+    Eine Zeile je Schwerpunkt mit Bezeichnung, Anzahl der Datenpunkte und
+    Summe der Funktionen - die Sicht, mit der sich eine Angebotssumme auf die
+    einzelnen Automationsschwerpunkte aufteilen laesst.
+    """
+    sheet = workbook.create_sheet("Schwerpunkte")
+    anzeige = frame.rename(columns={
+        "schwerpunkt": "Schwerpunkt",
+        "bezeichnung": "Bezeichnung",
+        "art": "Art",
+        "datenpunkte": "Datenpunkte",
+        "menge": "Funktionen",
+        "dateien": "Dateien",
+        "dokumente": "Anzahl Dateien",
+    })
+    _write_frame(sheet, anzeige)
+
+    letzte_zeile = sheet.max_row
+    summenzeile = letzte_zeile + 1
+    sheet.cell(row=summenzeile, column=1, value="Summe").font = HEADER_FONT
+    for titel in ("Datenpunkte", "Funktionen"):
+        if titel not in list(anzeige.columns):
+            continue
+        spalte = list(anzeige.columns).index(titel) + 1
+        buchstabe = get_column_letter(spalte)
+        zelle = sheet.cell(row=summenzeile, column=spalte,
+                           value=f"=SUM({buchstabe}2:{buchstabe}{letzte_zeile})")
+        zelle.font = HEADER_FONT
+    for spalte in range(1, sheet.max_column + 1):
+        sheet.cell(row=summenzeile, column=spalte).fill = TOTAL_FILL
+
+
+def _sheet_schwerpunkt_matrix(workbook: Workbook, title: str, profile,
+                              matrix: pd.DataFrame) -> None:
+    """Mengen je Schwerpunkt im Aufbau der VDI-Funktionsliste.
+
+    Wie das Uebersichtsblatt, nur ist eine Zeile hier kein Dokument, sondern
+    ein Automations-/Informationsschwerpunkt. Damit ist auf einen Blick zu
+    sehen, welche Funktionen in welchem ASP stecken.
+    """
+    sheet = workbook.create_sheet(title)
+    columns = list(profile.columns)
+    kopf_titel = ["Schwerpunkt", "Bezeichnung", "Datei", "Projekt", "Anlage", "Datenpunkte"]
+    erste_spalte, erste_zeile = _schreibe_vdi_kopf(
+        sheet, columns, kopf_titel, schluss_titel="Funktionen gesamt")
+    letzte_spalte = erste_spalte + len(columns) - 1
+    summe_spalte = erste_spalte + len(columns)
+
+    zeile = erste_zeile
+    for record in matrix.to_dict("records"):
+        for index, titel in enumerate(kopf_titel):
+            cell = sheet.cell(row=zeile, column=1 + index, value=_clean(record.get(titel, "")))
+            cell.border = BOX
+        for index, column in enumerate(columns):
+            menge = float(record.get(column.key, 0.0) or 0.0)
+            cell = sheet.cell(row=zeile, column=erste_spalte + index,
+                              value=menge if menge else None)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = BOX
+        gesamt = sheet.cell(
+            row=zeile, column=summe_spalte,
+            value=f"=SUM({get_column_letter(erste_spalte)}{zeile}:"
+                  f"{get_column_letter(letzte_spalte)}{zeile})")
+        gesamt.font = HEADER_FONT
+        gesamt.border = BOX
+        zeile += 1
+
+    letzte_datenzeile = zeile - 1
+    summenzeile = zeile
+    sheet.cell(row=summenzeile, column=1, value="Summe Funktionen").font = HEADER_FONT
+    for spalte in range(1, summe_spalte + 1):
+        sheet.cell(row=summenzeile, column=spalte).fill = TOTAL_FILL
+    datenpunkt_spalte = kopf_titel.index("Datenpunkte") + 1
+    for spalte in list(range(erste_spalte, summe_spalte + 1)) + [datenpunkt_spalte]:
+        buchstabe = get_column_letter(spalte)
+        zelle = sheet.cell(row=summenzeile, column=spalte,
+                           value=(f"=SUM({buchstabe}{erste_zeile}:{buchstabe}{letzte_datenzeile})"
+                                  if letzte_datenzeile >= erste_zeile else 0))
+        zelle.font = HEADER_FONT
+        zelle.border = BOX
+
+    for spalte in range(1, len(kopf_titel) + 1):
+        sheet.column_dimensions[get_column_letter(spalte)].width = 14 if spalte > 2 else 24
+    for spalte in range(erste_spalte, summe_spalte):
+        sheet.column_dimensions[get_column_letter(spalte)].width = 6
+    sheet.column_dimensions[get_column_letter(summe_spalte)].width = 14
+
+
+# --------------------------------------------------------------------------
 # Blatt im Layout der GA-Funktionsliste
 # --------------------------------------------------------------------------
 
-ROW_FIELD_COUNT = 6      # Datei, Blatt, Zeile Nr., Datenpunkt, Benutzeradresse, Typ
+# Schwerpunkt, Bezeichnung, Datei, Blatt, Zeile Nr., Datenpunkt,
+# Benutzeradresse, Typ
+ROW_FIELD_COUNT = 8
 
 
 def _schreibe_vdi_kopf(sheet: Worksheet, columns: list, kopf_titel: list[str],
@@ -301,7 +417,7 @@ def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.Da
     """
     sheet = workbook.create_sheet(title)
     columns = list(profile.columns)
-    kopf_titel = ["Datei", "Projekt", "Anlage", "Gewerk", "Blatt", "Datenpunkte"]
+    kopf_titel = ["Datei", "Projekt", "Anlage", "Schwerpunkt", "Gewerk", "Blatt", "Datenpunkte"]
     erste_spalte, erste_zeile = _schreibe_vdi_kopf(
         sheet, columns, kopf_titel, schluss_titel=f"Funktionen gesamt")
     letzte_spalte = erste_spalte + len(columns) - 1
@@ -375,7 +491,7 @@ def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.Da
     gesamtkosten.number_format = "#,##0.00"
 
     sheet.cell(row=preiszeile, column=summe_spalte, value="je Funktion").font = Font(italic=True, size=8)
-    for spalte in range(1, 7):
+    for spalte in range(1, len(kopf_titel) + 1):
         sheet.column_dimensions[get_column_letter(spalte)].width = 22 if spalte == 1 else 16
     for spalte in range(erste_spalte, summe_spalte + 1):
         sheet.column_dimensions[get_column_letter(spalte)].width = 6
@@ -398,7 +514,8 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
     first_data_column = ROW_FIELD_COUNT + 1
     remark_column = first_data_column + len(columns)
 
-    kopf_titel = ["Datei", "Blatt", "Zeile Nr.", "Datenpunkt", "Benutzeradresse", "Typ"]
+    kopf_titel = ["Schwerpunkt", "Bezeichnung", "Datei", "Blatt", "Zeile Nr.",
+                  "Datenpunkt", "Benutzeradresse", "Typ"]
 
     # --- Zeile 1-2: Gruppe und Untergruppe, jeweils zusammengefasst ---
     for zeile, attribut in ((1, "group"), (2, "subgroup")):
@@ -514,6 +631,6 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
     sheet.freeze_panes = sheet.cell(row=erste_datenzeile, column=first_data_column)
     for index in range(len(columns)):
         sheet.column_dimensions[get_column_letter(first_data_column + index)].width = 4.5
-    for index, breite in enumerate((26, 7, 8, 34, 22, 12), start=1):
+    for index, breite in enumerate((10, 24, 26, 7, 8, 34, 22, 12), start=1):
         sheet.column_dimensions[get_column_letter(index)].width = breite
     sheet.column_dimensions[gesamt_spalte].width = 40
