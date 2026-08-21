@@ -38,6 +38,7 @@ class Finding:
     seite: int = 0              # 0-basiert
     bbox: tuple[float, float, float, float] | None = None
     spalte: str = ""
+    schwerpunkt: str = ""       # ASP/ISP, zu dem der Befund gehoert
     werte: dict[str, float] = field(default_factory=dict)
 
     @property
@@ -48,6 +49,14 @@ class Finding:
 # --------------------------------------------------------------------------
 # Befunde sammeln
 # --------------------------------------------------------------------------
+
+def _schwerpunkt_der_seite(document: db.Document, page_index: int) -> str:
+    """ASP/ISP der Seite - fuer Befunde, die keiner einzelnen Zeile gehoeren."""
+    for page in document.pages:
+        if page.page_index == page_index and page.schwerpunkt:
+            return page.schwerpunkt
+    return ""
+
 
 def findings_for_document(document: db.Document) -> list[Finding]:
     """Alle pruefwuerdigen Punkte eines importierten Dokuments."""
@@ -101,6 +110,7 @@ def findings_for_document(document: db.Document) -> list[Finding]:
                 seite=zeile.page_index if zeile else page_index,
                 bbox=bbox,
                 spalte=column.label if column else "",
+                schwerpunkt=_schwerpunkt_der_seite(document, page_index),
                 werte={"Liste": wert, "eigene Zaehlung": eigener_wert},
             ))
 
@@ -133,6 +143,7 @@ def findings_for_document(document: db.Document) -> list[Finding]:
             datei=document.file_name,
             seite=row.page_index,
             bbox=db.bbox_from_text(row.bbox),
+            schwerpunkt=row.schwerpunkt or _schwerpunkt_der_seite(document, row.page_index),
             werte={"Summe der Zeile": sum(v.count or 0.0 for v in werte)},
         ))
 

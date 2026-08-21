@@ -17,6 +17,18 @@ from vdi3814.profiles_loader import get_profile
 PREISE = {"A_1_1": 45.0, "A_1_5": 80.0, "A_8_1": 12.5}
 
 
+def _erste_datenspalte(blatt) -> int:
+    """Erste Funktionsspalte des VDI-Kopfes.
+
+    Links davon stehen die Zeilenfelder (Datei, Projekt, Anlage, Schwerpunkt,
+    ...); ihre Anzahl darf sich aendern, ohne dass die Tests brechen.
+    """
+    for spalte in range(1, blatt.max_column + 1):
+        if blatt.cell(4, spalte).value == "Abschnitt":
+            return spalte + 1
+    raise AssertionError("Kopfzeile 'Abschnitt' nicht gefunden")
+
+
 @pytest.fixture(scope="module")
 def export(tmp_path_factory, samples):
     """Importiert beide Beispiellisten und schreibt einen echten Export."""
@@ -40,6 +52,9 @@ def export(tmp_path_factory, samples):
             matrizen={p: aggregate.datei_spalten_matrix(session, p)
                       for p in aggregate.profiles_in_use(session)},
             pruefung=aggregate.pruefbericht(session),
+            schwerpunkte=aggregate.schwerpunkt_summary(roh),
+            schwerpunkt_matrizen={p: aggregate.schwerpunkt_matrix(session, p)
+                                  for p in aggregate.profiles_in_use(session)},
         )
         mengen = roh.groupby("spalte_key")["wert"].sum().to_dict()
     return ziel, mengen
@@ -54,10 +69,11 @@ def test_uebersicht_ist_ein_vdi_blatt_mit_einer_zeile_je_datei(export):
     blatt = buch[blaetter[0]]
     # Kopfaufbau wie in der Vorlage
     assert blatt.cell(1, 1).value == "Datei"
-    assert blatt.cell(4, 6).value == "Abschnitt"
-    assert blatt.cell(5, 6).value == "Spalte"
+    erste = _erste_datenspalte(blatt)
+    assert blatt.cell(4, erste - 1).value == "Abschnitt"
+    assert blatt.cell(5, erste - 1).value == "Spalte"
     # Nummernzeilen ergeben zusammen die Spaltenadresse
-    assert f"{blatt.cell(4, 7).value}.{blatt.cell(5, 7).value}" == "1.1"
+    assert f"{blatt.cell(4, erste).value}.{blatt.cell(5, erste).value}" == "1.1"
 
     # Je Datei genau eine Zeile, darunter Summe / Einheitspreis / Kosten
     beschriftungen = [blatt.cell(z, 1).value for z in range(6, blatt.max_row + 1)]
@@ -75,11 +91,12 @@ def test_mengen_und_kosten_sind_formeln(export):
     blatt = buch[[n for n in buch.sheetnames if n.startswith("Übersicht")][0]]
     summenzeile = blatt.max_row - 2
     kostenzeile = blatt.max_row
+    erste = _erste_datenspalte(blatt)
 
-    assert str(blatt.cell(summenzeile, 7).value).startswith("=SUM(")
-    assert str(blatt.cell(kostenzeile, 7).value).startswith("=G")
+    assert str(blatt.cell(summenzeile, erste).value).startswith("=SUM(")
+    assert str(blatt.cell(kostenzeile, erste).value).startswith(f"={get_column_letter(erste)}")
     # Der Einheitspreis muss eine schlichte Zahl bleiben - er wird eingetippt
-    assert isinstance(blatt.cell(summenzeile + 1, 7).value, (int, float))
+    assert isinstance(blatt.cell(summenzeile + 1, erste).value, (int, float))
 
     kosten = buch["Kostenschätzung"]
     assert str(kosten.cell(2, 6).value).startswith("='Übersicht"), \
@@ -118,7 +135,7 @@ def test_formeln_rechnen_richtig(export):
     profil = get_profile("vdi3814_alt" if "alt" in name or len(buch.sheetnames) else "vdi3814_alt")
 
     geprueft = 0
-    for spalte in range(7, blatt.max_column):
+    for spalte in range(_erste_datenspalte(blatt), blatt.max_column):
         adresse = f"{blatt.cell(4, spalte).value}.{blatt.cell(5, spalte).value}"
         eintrag = profil.column_by_address(adresse)
         if eintrag is None:
@@ -168,7 +185,7 @@ def test_zeilensumme_je_datei_stimmt(export):
     while str(blatt.cell(zeile, 1).value or "").endswith(".pdf"):
         einzeln = sum(
             blatt.cell(zeile, spalte).value or 0
-            for spalte in range(7, blatt.max_column)
+            for spalte in range(_erste_datenspalte(blatt), blatt.max_column)
             if isinstance(blatt.cell(zeile, spalte).value, (int, float))
         )
         gesamt = werte.get((name.upper(), f"{letzte}{zeile}"))
