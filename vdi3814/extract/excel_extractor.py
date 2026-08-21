@@ -14,7 +14,7 @@ from pathlib import Path
 from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote, RowKind
 from ..textutil import extract_footnote_markers, normalize, normalize_address, parse_count
 from .base import ExtractionMode, RawTable, assign_sections, drop_after_footer
-from .rowfilter import classify_row
+from .rowfilter import classify_row, markiere_unbeschriftete_summenzeilen
 
 log = logging.getLogger(__name__)
 
@@ -351,7 +351,7 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
             )
         )
 
-    rows = drop_after_footer(rows)
+    rows = markiere_unbeschriftete_summenzeilen(drop_after_footer(rows))
     texts = [" ".join(value for value in row if value) for row in grid[:max(section_row + 2, 12)]]
     return RawTable(
         page_index=sheet_index,

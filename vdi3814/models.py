@@ -27,6 +27,7 @@ class PageKind(str, Enum):
     """Ergebnis der Seitenklassifikation."""
 
     FUNKTIONSLISTE = "funktionsliste"
+    SUMMENBLATT = "summenblatt"     # nur Summen je Anlage, wird nicht gezaehlt
     SCHEMA = "schema"
     SONSTIGES = "sonstiges"
     FEHLER = "fehler"
@@ -167,10 +168,22 @@ class DocumentMetadata:
 
 @dataclass
 class SumCheck:
+    """Abgleich einer Spaltensumme gegen die Summenzeile - immer je Seite.
+
+    Ein dokumentweiter Vergleich waere falsch: Plansaetze enthalten oft ein
+    eigenes Summenblatt mit Summen je Anlage, die einen anderen Umfang haben
+    als die Detailseiten (teils sogar Anlagen aus anderen Dateien).
+    """
+
     column_index: int
     reported: float | None
     computed: float
     matches: bool
+    page_index: int = 0
+
+    @property
+    def difference(self) -> float:
+        return (self.reported or 0.0) - self.computed
 
 
 @dataclass

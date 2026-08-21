@@ -54,44 +54,55 @@ def findings_for_document(document: db.Document) -> list[Finding]:
     befunde: list[Finding] = []
     columns = {c.idx: c for c in document.columns}
 
-    # 1. Abweichung zwischen eigener Summe und der Summenzeile des Dokuments
-    eigene: dict[int, float] = {}
-    gemeldet: dict[int, float] = {}
-    summenzeilen: dict[int, db.Row] = {}
+    # 1. Abweichung zwischen eigener Summe und der Summenzeile - je Seite.
+    #    Ein dokumentweiter Vergleich waere falsch: Plansaetze enthalten oft ein
+    #    eigenes Summenblatt mit Summen je Anlage. Das fasst einen anderen
+    #    Umfang zusammen (teils Anlagen aus anderen Dateien) und wuerde in
+    #    jeder Spalte eine scheinbare Abweichung erzeugen.
+    seiten: dict[int, dict[str, dict]] = {}
     for row in document.rows:
+        eintrag = seiten.setdefault(row.page_index, {"eigen": {}, "gemeldet": {}, "zeile": {}})
         for value in row.values:
             if value.count is None:
                 continue
             if row.kind == "daten":
-                eigene[value.column_idx] = eigene.get(value.column_idx, 0.0) + value.count
+                eintrag["eigen"][value.column_idx] = (
+                    eintrag["eigen"].get(value.column_idx, 0.0) + value.count)
             elif row.kind == "summe":
-                gemeldet[value.column_idx] = gemeldet.get(value.column_idx, 0.0) + value.count
-                summenzeilen.setdefault(value.column_idx, row)
+                eintrag["gemeldet"][value.column_idx] = (
+                    eintrag["gemeldet"].get(value.column_idx, 0.0) + value.count)
+                eintrag["zeile"].setdefault(value.column_idx, row)
 
-    for column_idx, wert in gemeldet.items():
-        eigener_wert = eigene.get(column_idx, 0.0)
-        if abs(wert - eigener_wert) < 1e-6:
-            continue
-        column = columns.get(column_idx)
-        zeile = summenzeilen.get(column_idx)
-        bbox = db.bbox_from_text(zeile.bbox) if zeile else None
-        befunde.append(Finding(
-            art="abweichung",
-            titel=f"Spalte {column.address if column else column_idx}: "
-                  f"Liste {wert:g}, eigene Zaehlung {eigener_wert:g}",
-            erklaerung=(
-                "Die Summenzeile der Liste weicht von der Summe der Einzelzeilen ab. "
-                "Haeufigste Ursachen: die Liste wurde nach dem Ausfuellen geaendert, "
-                "eine Zeile wurde uebersehen, oder ein Wert steht zwischen zwei Spalten. "
-                "Die Markierung zeigt die Summenzeile der Quelldatei."
-            ),
-            dokument_id=document.id,
-            datei=document.file_name,
-            seite=zeile.page_index if zeile else 0,
-            bbox=bbox,
-            spalte=column.label if column else "",
-            werte={"Liste": wert, "eigene Zaehlung": eigener_wert},
-        ))
+    for page_index in sorted(seiten):
+        eigen = seiten[page_index]["eigen"]
+        gemeldet = seiten[page_index]["gemeldet"]
+        if not eigen or not gemeldet:
+            continue          # Seite ohne Summenzeile oder reines Summenblatt
+        for column_idx, wert in gemeldet.items():
+            eigener_wert = eigen.get(column_idx, 0.0)
+            if abs(wert - eigener_wert) < 1e-6:
+                continue
+            column = columns.get(column_idx)
+            zeile = seiten[page_index]["zeile"].get(column_idx)
+            bbox = db.bbox_from_text(zeile.bbox) if zeile else None
+            befunde.append(Finding(
+                art="abweichung",
+                titel=f"Seite {page_index + 1}, Spalte "
+                      f"{column.address if column else column_idx}: "
+                      f"Liste {wert:g}, eigene Zaehlung {eigener_wert:g}",
+                erklaerung=(
+                    "Die Summenzeile dieser Seite weicht von der Summe der Einzelzeilen "
+                    "derselben Seite ab. Haeufigste Ursachen: die Liste wurde nach dem "
+                    "Ausfuellen geaendert, eine Zeile wurde uebersehen, oder ein Wert "
+                    "steht zwischen zwei Spalten. Die Markierung zeigt die Summenzeile."
+                ),
+                dokument_id=document.id,
+                datei=document.file_name,
+                seite=zeile.page_index if zeile else page_index,
+                bbox=bbox,
+                spalte=column.label if column else "",
+                werte={"Liste": wert, "eigene Zaehlung": eigener_wert},
+            ))
 
     # 2. Nicht gezaehlte Zeilen mit Werten - hier lohnt der Blick am meisten.
     #    Eine Summenzeile, die zur eigenen Zaehlung passt, ist dagegen normal
@@ -99,10 +110,17 @@ def findings_for_document(document: db.Document) -> list[Finding]:
     for row in document.rows:
         if row.kind in ("daten", "leer"):
             continue
-        if row.kind == "summe" and not any(
-            abs(gemeldet.get(idx, 0.0) - eigene.get(idx, 0.0)) > 1e-6 for idx in gemeldet
-        ):
-            continue
+        if row.kind == "summe":
+            # Eine Summenzeile, die zur eigenen Zaehlung derselben Seite passt,
+            # ist normal und wird nicht gemeldet.
+            seite = seiten.get(row.page_index, {"eigen": {}, "gemeldet": {}})
+            eigen_seite, gemeldet_seite = seite["eigen"], seite["gemeldet"]
+            stimmt = eigen_seite and all(
+                abs(gemeldet_seite.get(idx, 0.0) - eigen_seite.get(idx, 0.0)) < 1e-6
+                for idx in gemeldet_seite
+            )
+            if stimmt:
+                continue
         werte = [v for v in row.values if v.count is not None]
         if not werte:
             continue

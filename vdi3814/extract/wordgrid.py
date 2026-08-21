@@ -22,39 +22,9 @@ from dataclasses import dataclass
 from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote, RowKind
 from ..textutil import extract_footnote_markers, normalize, normalize_address, parse_count
 from .base import ExtractionMode, RawTable, nearest_section, sections_by_position, drop_after_footer
-from .rowfilter import classify_row
+from .rowfilter import classify_row, markiere_unbeschriftete_summenzeilen
 
 log = logging.getLogger(__name__)
-
-Word = tuple[float, float, float, float, str, int, int, int]
-
-# Startwerte fuer die erste Messung. Alle spaeteren Toleranzen werden aus der
-# tatsaechlich gemessenen Geometrie der jeweiligen Seite abgeleitet
-# (Spaltenabstand und Zeilenabstand) - es gibt keine festen Positionen.
-ROW_TOLERANCE = 4.0        # nur fuer den ersten Clusterdurchlauf
-LABEL_ROW_TOLERANCE = 5.0  # Suchband um die Kopfzeilen "Abschnitt"/"Spalte"
-
-_INT_RE = re.compile(r"^\d{1,3}$")
-_ADDR_RE = re.compile(r"^\d{1,2}(\.\d{1,2})*\.?$")
-
-
-def _is_rotated(word: Word) -> bool:
-    """Senkrecht gesetzter Text: Wortbox ist deutlich hoeher als breit.
-
-    Die Mindesthoehe verhindert Fehltreffer bei kurzen waagerechten Woertern
-    wie "01" oder "B", deren Box zufaellig hochkant wirkt.
-    """
-    height = word[3] - word[1]
-    return height > (word[2] - word[0]) * 1.6 and height > 12.0
-
-
-def _cx(word: Word) -> float:
-    return (word[0] + word[2]) / 2.0
-
-
-def _cy(word: Word) -> float:
-    return (word[1] + word[3]) / 2.0
-
 
 Word = tuple[float, float, float, float, str, int, int, int]
 
@@ -574,6 +544,7 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
 
     if bottom is None:
         rows = drop_after_footer(rows)
+    rows = markiere_unbeschriftete_summenzeilen(rows)
 
     return RawTable(
         page_index=page_index,

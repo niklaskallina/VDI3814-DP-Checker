@@ -122,23 +122,60 @@ def _merge_tables(tables: list[RawTable], profile: Profile | None) -> tuple[
 
 
 def _validate_sums(result: DocumentResult) -> list[SumCheck]:
-    """Vergleicht die eigene Aufsummierung mit der Summenzeile des Dokuments."""
-    reported: dict[int, float] = {}
+    """Prueft je Seite: Summenzeile der Seite gegen die Datenzeilen derselben Seite.
+
+    Nur so ist der Vergleich aussagekraeftig. Reine Summenblaetter (Seiten, auf
+    denen ausschliesslich Summen je Anlage stehen) werden nicht geprueft - sie
+    fassen einen anderen Umfang zusammen und wuerden sonst auf jeder Spalte
+    eine scheinbare Abweichung erzeugen.
+    """
+    seiten: dict[int, dict[str, dict[int, float]]] = {}
     for row in result.rows:
-        if row.kind is not RowKind.SUMME:
-            continue        # Uebertraege NICHT als Kontrollsumme verwenden
+        eintrag = seiten.setdefault(row.page_index, {"summe": {}, "eigen": {}, "uebertrag": {}})
+        if row.kind is RowKind.SUMME:
+            ziel = eintrag["summe"]
+        elif row.kind is RowKind.UEBERTRAG:
+            # Der Uebertrag wird nicht gezaehlt, gehoert aber zur erwarteten
+            # Seitensumme: die Summenzeile enthaelt Uebertrag + Seitenwerte.
+            ziel = eintrag["uebertrag"]
+        elif row.is_countable:
+            ziel = eintrag["eigen"]
+        else:
+            continue        # Leerzeilen und Fussbereich nie werten
         for cell in row.cells:
             if cell.count is not None:
-                reported[cell.column_index] = reported.get(cell.column_index, 0.0) + cell.count
+                ziel[cell.column_index] = ziel.get(cell.column_index, 0.0) + cell.count
 
-    computed = result.totals()
     checks: list[SumCheck] = []
-    for index in sorted(set(computed) | set(reported)):
-        own = computed.get(index, 0.0)
-        given = reported.get(index)
-        checks.append(SumCheck(column_index=index, reported=given, computed=own,
-                               matches=given is None or abs(given - own) < 1e-6))
+    for page_index in sorted(seiten):
+        gemeldet = seiten[page_index]["summe"]
+        eigen = dict(seiten[page_index]["eigen"])
+        uebertrag = seiten[page_index]["uebertrag"]
+        if not gemeldet or not eigen:
+            # Ohne eigene Datenzeilen gibt es nichts zu pruefen: das ist ein
+            # Summenblatt (nur Summen je Anlage, ggf. mit Uebertrag).
+            continue
+        for index, wert in uebertrag.items():
+            eigen[index] = eigen.get(index, 0.0) + wert
+        for index in sorted(set(eigen) | set(gemeldet)):
+            own = eigen.get(index, 0.0)
+            given = gemeldet.get(index)
+            checks.append(SumCheck(column_index=index, reported=given, computed=own,
+                                   matches=given is None or abs(given - own) < 1e-6,
+                                   page_index=page_index))
     return checks
+
+
+def _summenblatt_seiten(result: DocumentResult) -> set[int]:
+    """Seiten, die ausschliesslich Summen bzw. Uebertraege enthalten."""
+    seiten: dict[int, list] = {}
+    for row in result.rows:
+        seiten.setdefault(row.page_index, []).append(row)
+    return {
+        index for index, rows in seiten.items()
+        if any(r.kind in (RowKind.SUMME, RowKind.UEBERTRAG) for r in rows)
+        and not any(r.is_countable for r in rows)
+    }
 
 
 # --------------------------------------------------------------------------
@@ -367,13 +404,32 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
             + ", ".join(c.display() for c in unmatched[:5])
             + (" ..." if len(unmatched) > 5 else "")
         )
-    for check in result.sum_checks:
-        if not check.matches:
-            column = result.column_by_index(check.column_index)
-            result.warnings.append(
-                f"Summenabweichung in Spalte '{column.display() if column else check.column_index}': "
-                f"Dokument {check.reported:g}, eigene Summe {check.computed:g}"
+    # Reine Summenblaetter kenntlich machen: dort steht je Anlage eine Summe,
+    # die bewusst nicht mitgezaehlt wird - sonst waere jede Anlage doppelt drin.
+    summenblaetter = _summenblatt_seiten(result)
+    for page in result.pages:
+        if page.page_index in summenblaetter:
+            page.classification = PageClassification(
+                PageKind.SUMMENBLATT, 1.0,
+                "Summenblatt: enthaelt nur Summen je Anlage - wird nicht gezaehlt",
             )
+    if summenblaetter:
+        result.warnings.append(
+            f"{len(summenblaetter)} Summenblatt-Seite(n) erkannt "
+            f"(Seite {', '.join(str(i + 1) for i in sorted(summenblaetter))}): "
+            "enthalten nur Summen je Anlage und werden nicht mitgezaehlt."
+        )
+
+    # Summenabweichungen gebuendelt melden - eine Meldung je Seite statt je Spalte.
+    abweichungen = [c for c in result.sum_checks if not c.matches]
+    if abweichungen:
+        seiten = sorted({c.page_index for c in abweichungen})
+        result.warnings.append(
+            f"{len(abweichungen)} Summenabweichung(en) auf {len(seiten)} Seite(n) "
+            f"(Seite {', '.join(str(i + 1) for i in seiten[:8])}"
+            f"{' ...' if len(seiten) > 8 else ''}). "
+            "Einzelheiten im Reiter 'Nachweis & Differenzen'."
+        )
     return result
 
 

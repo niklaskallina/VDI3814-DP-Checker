@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session                                     # noqa: E
 from vdi3814 import aggregate, db, evidence, export_excel, projects     # noqa: E402
 from vdi3814.config import SETTINGS                                     # noqa: E402
 from vdi3814.costs import apply_prices, price_template, total_cost      # noqa: E402
-from vdi3814.models import Cell, DocumentResult                         # noqa: E402
+from vdi3814.models import Cell, DocumentResult, RowKind                         # noqa: E402
 from vdi3814.pipeline import process_file                               # noqa: E402
 from vdi3814.profiles_loader import load_profiles                       # noqa: E402
 from vdi3814.vision import ocr                                          # noqa: E402
@@ -163,24 +163,48 @@ with tab_import:
                 "Datenpunkte": len(ergebnis.counted_rows()),
                 "Funktionen": ergebnis.grand_total(),
                 "Nicht gezählt": len(ergebnis.excluded_rows()),
-                "Summenprüfung": "OK" if all(c.matches for c in ergebnis.sum_checks) else "Abweichung",
+                "Summenprüfung": _pruefungstext(ergebnis),
                 "Übersprungen": ", ".join(f"S.{p.page_index + 1}" for p in ergebnis.skipped_pages()),
             })
         st.dataframe(pd.DataFrame(zeilen), width="stretch", hide_index=True)
-        for name, ergebnis in state()["results"].items():
-            for hinweis in ergebnis.warnings:
-                st.warning(f"{name}: {hinweis}")
+        hinweise = [
+            {"Datei": name, "Hinweis": hinweis}
+            for name, ergebnis in state()["results"].items()
+            for hinweis in ergebnis.warnings
+        ]
+        if hinweise:
+            with st.expander(f"Hinweise zur Erkennung ({len(hinweise)})", expanded=len(hinweise) <= 3):
+                st.dataframe(pd.DataFrame(hinweise), width="stretch", hide_index=True)
 
 
 # --------------------------------------------------------------------------
 # 2 - Vorschau und Korrektur
 # --------------------------------------------------------------------------
 
+def _pruefungstext(ergebnis) -> str:
+    """Kurzfassung der Summenprüfung für die Ergebnisliste.
+
+    Verglichen wird je Seite: die Zeile "Summe Funktionen" dieser Seite gegen
+    die Summe der Datenzeilen derselben Seite (zuzüglich eines Übertrags).
+    """
+    if not ergebnis.sum_checks:
+        return "keine Summenzeile"
+    seiten = {c.page_index for c in ergebnis.sum_checks}
+    abweichend = {c.page_index for c in ergebnis.sum_checks if not c.matches}
+    if not abweichend:
+        return f"{len(seiten)} Seiten exakt"
+    return (f"{len(abweichend)} von {len(seiten)} Seiten abweichend "
+            f"(S. {', '.join(str(i + 1) for i in sorted(abweichend)[:5])})")
+
+
 def result_to_frame(result: DocumentResult) -> pd.DataFrame:
     columns = [c for c in result.columns if not c.is_note_column]
     records = []
     for row in result.rows:
-        if row.is_sum_row:
+        # Nur echte Datenpunkte zeigen. Summen-, Uebertrags-, Leer- und
+        # Fussbereichszeilen stehen nachvollziehbar unter "Nicht gezaehlte
+        # Zeilen" und haben in der Korrekturtabelle nichts verloren.
+        if row.kind is not RowKind.DATEN:
             continue
         record = {
             "Zeile": row.row_no,
@@ -203,7 +227,7 @@ def _column_title(column) -> str:
 def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResult:
     columns = [c for c in result.columns if not c.is_note_column]
     title_to_index = {_column_title(c): c.index for c in columns}
-    data_rows = [row for row in result.rows if not row.is_sum_row]
+    data_rows = [row for row in result.rows if row.kind is RowKind.DATEN]
     for position, record in enumerate(frame.to_dict("records")):
         if position >= len(data_rows):
             break
