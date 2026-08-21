@@ -103,6 +103,75 @@ tab_import, tab_preview, tab_check, tab_overview, tab_costs, tab_export, tab_dat
 )
 
 
+def _pruefungstext(ergebnis) -> str:
+    """Kurzfassung der Summenprüfung für die Ergebnisliste.
+
+    Verglichen wird je Seite: die Zeile "Summe Funktionen" dieser Seite gegen
+    die Summe der Datenzeilen derselben Seite (zuzüglich eines Übertrags).
+    """
+    if not ergebnis.sum_checks:
+        return "keine Summenzeile"
+    seiten = {c.page_index for c in ergebnis.sum_checks}
+    abweichend = {c.page_index for c in ergebnis.sum_checks if not c.matches}
+    if not abweichend:
+        return f"{len(seiten)} Seiten exakt"
+    return (f"{len(abweichend)} von {len(seiten)} Seiten abweichend "
+            f"(S. {', '.join(str(i + 1) for i in sorted(abweichend)[:5])})")
+
+
+def result_to_frame(result: DocumentResult) -> pd.DataFrame:
+    columns = [c for c in result.columns if not c.is_note_column]
+    records = []
+    for row in result.rows:
+        # Nur echte Datenpunkte zeigen. Summen-, Uebertrags-, Leer- und
+        # Fussbereichszeilen stehen nachvollziehbar unter "Nicht gezaehlte
+        # Zeilen" und haben in der Korrekturtabelle nichts verloren.
+        if row.kind is not RowKind.DATEN:
+            continue
+        record = {
+            "Zeile": row.row_no,
+            "Datenpunkt": row.klartext,
+            "Benutzeradresse": row.bas,
+            "Typ": row.qualifier,
+            "Bemerkung": row.remark,
+        }
+        for column in columns:
+            record[_column_title(column)] = row.value(column.index)
+        records.append(record)
+    return pd.DataFrame(records, columns=ROW_FIELDS + [_column_title(c) for c in columns])
+
+
+def _column_title(column) -> str:
+    prefix = column.address or str(column.index)
+    return f"{prefix} · {column.label or column.column_key or ''}"[:60]
+
+
+def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResult:
+    columns = [c for c in result.columns if not c.is_note_column]
+    title_to_index = {_column_title(c): c.index for c in columns}
+    data_rows = [row for row in result.rows if row.kind is RowKind.DATEN]
+    for position, record in enumerate(frame.to_dict("records")):
+        if position >= len(data_rows):
+            break
+        row = data_rows[position]
+        row.row_no = str(record.get("Zeile", "") or "")
+        row.klartext = str(record.get("Datenpunkt", "") or "")
+        row.bas = str(record.get("Benutzeradresse", "") or "")
+        row.qualifier = str(record.get("Typ", "") or "")
+        row.remark = str(record.get("Bemerkung", "") or "")
+        alt = {cell.column_index: cell for cell in row.cells}
+        neu: list[Cell] = []
+        for titel, column_index in title_to_index.items():
+            wert = record.get(titel)
+            if wert is None or (isinstance(wert, float) and pd.isna(wert)) or wert == "":
+                continue
+            vorher = alt.get(column_index)
+            neu.append(Cell(column_index=column_index, raw_value=str(wert), count=float(wert),
+                            bbox=vorher.bbox if vorher else None))
+        row.cells = neu
+    return result
+
+
 # --------------------------------------------------------------------------
 # 1 - Import
 # --------------------------------------------------------------------------
@@ -181,74 +250,9 @@ with tab_import:
 # 2 - Vorschau und Korrektur
 # --------------------------------------------------------------------------
 
-def _pruefungstext(ergebnis) -> str:
-    """Kurzfassung der Summenprüfung für die Ergebnisliste.
-
-    Verglichen wird je Seite: die Zeile "Summe Funktionen" dieser Seite gegen
-    die Summe der Datenzeilen derselben Seite (zuzüglich eines Übertrags).
-    """
-    if not ergebnis.sum_checks:
-        return "keine Summenzeile"
-    seiten = {c.page_index for c in ergebnis.sum_checks}
-    abweichend = {c.page_index for c in ergebnis.sum_checks if not c.matches}
-    if not abweichend:
-        return f"{len(seiten)} Seiten exakt"
-    return (f"{len(abweichend)} von {len(seiten)} Seiten abweichend "
-            f"(S. {', '.join(str(i + 1) for i in sorted(abweichend)[:5])})")
-
-
-def result_to_frame(result: DocumentResult) -> pd.DataFrame:
-    columns = [c for c in result.columns if not c.is_note_column]
-    records = []
-    for row in result.rows:
-        # Nur echte Datenpunkte zeigen. Summen-, Uebertrags-, Leer- und
-        # Fussbereichszeilen stehen nachvollziehbar unter "Nicht gezaehlte
-        # Zeilen" und haben in der Korrekturtabelle nichts verloren.
-        if row.kind is not RowKind.DATEN:
-            continue
-        record = {
-            "Zeile": row.row_no,
-            "Datenpunkt": row.klartext,
-            "Benutzeradresse": row.bas,
-            "Typ": row.qualifier,
-            "Bemerkung": row.remark,
-        }
-        for column in columns:
-            record[_column_title(column)] = row.value(column.index)
-        records.append(record)
-    return pd.DataFrame(records, columns=ROW_FIELDS + [_column_title(c) for c in columns])
-
-
-def _column_title(column) -> str:
-    prefix = column.address or str(column.index)
-    return f"{prefix} · {column.label or column.column_key or ''}"[:60]
-
-
-def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResult:
-    columns = [c for c in result.columns if not c.is_note_column]
-    title_to_index = {_column_title(c): c.index for c in columns}
-    data_rows = [row for row in result.rows if row.kind is RowKind.DATEN]
-    for position, record in enumerate(frame.to_dict("records")):
-        if position >= len(data_rows):
-            break
-        row = data_rows[position]
-        row.row_no = str(record.get("Zeile", "") or "")
-        row.klartext = str(record.get("Datenpunkt", "") or "")
-        row.bas = str(record.get("Benutzeradresse", "") or "")
-        row.qualifier = str(record.get("Typ", "") or "")
-        row.remark = str(record.get("Bemerkung", "") or "")
-        alt = {cell.column_index: cell for cell in row.cells}
-        neu: list[Cell] = []
-        for titel, column_index in title_to_index.items():
-            wert = record.get(titel)
-            if wert is None or (isinstance(wert, float) and pd.isna(wert)) or wert == "":
-                continue
-            vorher = alt.get(column_index)
-            neu.append(Cell(column_index=column_index, raw_value=str(wert), count=float(wert),
-                            bbox=vorher.bbox if vorher else None))
-        row.cells = neu
-    return result
-
+# --------------------------------------------------------------------------
+# 2 - Vorschau und Korrektur
+# --------------------------------------------------------------------------
 
 with tab_preview:
     st.subheader("Erkanntes Ergebnis prüfen und korrigieren")
