@@ -104,9 +104,9 @@ jobs:
 
           Datenbank und Exporte werden neben der EXE abgelegt (Ordner data\ bzw. out\).
 
-          Fuer gescannte Listen und Bilder wird zusaetzlich Ollama mit einem
-          lokalen Vision-Modell benoetigt (siehe README.md, Abschnitt Installation).
-          Excel-Dateien und PDFs mit Textebene funktionieren ohne Ollama.
+          Es ist alles enthalten, was gebraucht wird - auch die Texterkennung
+          fuer gescannte Listen. Es wird keine KI und keine Internetverbindung
+          verwendet; die Projektdaten bleiben auf diesem Rechner.
           "@ | Set-Content -Encoding UTF8 "$target/START-HIER.txt"
 
       - name: Startfaehigkeit pruefen
