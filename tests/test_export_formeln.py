@@ -5,6 +5,8 @@ Einheitspreise eingetragen. Diese Tests pruefen deshalb nicht nur, dass
 Formeln dastehen, sondern rechnen sie nach und vergleichen mit der Datenbank.
 """
 
+import copy
+
 import openpyxl
 import pytest
 from openpyxl.utils import get_column_letter
@@ -156,6 +158,156 @@ def test_formeln_rechnen_richtig(export):
 
 def test_zeilensumme_je_datei_stimmt(export):
     """Die Zeilensumme einer Datei muss deren Gesamtmenge sein."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+    # Ganz rechts liegt die ausgeblendete Schluesselspalte, davor "Funktionen gesamt".
+    gesamt_spalte = blatt.max_column - 1
+    letzte = get_column_letter(gesamt_spalte)
+    erste = _erste_datenspalte(blatt)
+
+    werte = _rechne(ziel)
+
+    zeile = 6
+    while str(blatt.cell(zeile, 1).value or "").endswith(".pdf"):
+        einzeln = sum(_zahl(werte, name, spalte, zeile)
+                      for spalte in range(erste, gesamt_spalte))
+        gesamt = werte.get((name.upper(), f"{letzte}{zeile}"))
+        assert float(gesamt) == pytest.approx(einzeln)
+        zeile += 1
+    assert zeile > 6, "es muss mindestens eine Dateizeile geben"
+
+
+def test_uebersicht_haengt_an_der_ga_funktionsliste(export):
+    """Ohne Verknuepfung wuerde ein Loeschen von Zeilen unbemerkt bleiben."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+    liste = [n for n in buch.sheetnames if n.startswith("GA-Funktionsliste")][0]
+    erste = _erste_datenspalte(blatt)
+
+    # Verknuepft wird ueber einen Schluessel je Liste - Dateinamen sind nicht
+    # eindeutig. Die Spalte steht ganz rechts und ist ausgeblendet.
+    schluessel = blatt.max_column
+    assert blatt.cell(1, schluessel).value == "Schlüssel"
+    assert blatt.column_dimensions[get_column_letter(schluessel)].hidden
+    assert blatt.cell(6, schluessel).value == buch[liste].cell(6, buch[liste].max_column).value
+
+    # Mengen und Datenpunkte werden gezaehlt, nicht kopiert.
+    menge = str(blatt.cell(6, erste).value)
+    assert menge.startswith("=SUMIFS("), menge
+    assert f"'{liste}'!" in menge
+    assert str(blatt.cell(6, erste - 1).value).startswith("=COUNTIFS(")
+
+    # Auch die flache Spaltenliste zieht die Menge aus der Uebersicht.
+    assert str(buch["Spaltensummen"].cell(2, 7).value).startswith("='Übersicht")
+
+
+def test_geloeschte_zeile_wirkt_bis_in_die_kosten(export, tmp_path):
+    """Der eigentliche Zweck: in der GA-Funktionsliste darf geloescht werden."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    liste = buch[[n for n in buch.sheetnames if n.startswith("GA-Funktionsliste")][0]]
+
+    gesamt_zelle = (f"{get_column_letter(buch[name].max_column - 1)}"
+                    f"{buch[name].max_row - 2}")          # Summenzeile, Spalte "Funktionen gesamt"
+    vorher = float(_rechne(ziel)[(name.upper(), gesamt_zelle)])
+
+    # Erste Datenzeile entfernen - so wie es in Excel jemand tun wuerde.
+    entfallen = sum(wert for spalte in range(_erste_datenspalte(liste), liste.max_column - 1)
+                    if isinstance(wert := liste.cell(6, spalte).value, (int, float)))
+    assert entfallen > 0, "die geloeschte Zeile muss Mengen enthalten"
+    letzte_datenzeile = liste.max_row - 3
+    liste.delete_rows(letzte_datenzeile + 1, 3)   # Summe/Einheitspreis/Kosten der Liste
+    liste.delete_rows(6)
+    gekuerzt = tmp_path / "gekuerzt.xlsx"
+    buch.save(gekuerzt)
+
+    nachher = float(_rechne(gekuerzt)[(name.upper(), gesamt_zelle)])
+    assert nachher == pytest.approx(vorher - entfallen)
+
+
+@pytest.fixture(scope="module")
+def zwei_listen(tmp_path_factory, samples):
+    """Zwei Listen derselben Fassung - und zwar mit demselben Dateinamen.
+
+    Genau hier muss sich zeigen, ob die Uebersicht die richtigen Zeilen der
+    GA-Funktionsliste erwischt: ueber den Dateinamen waeren beide nicht zu
+    unterscheiden, und ein Bezug auf feste Zeilenbereiche wuerde bei der
+    zweiten Liste danebengreifen.
+    """
+    verzeichnis = tmp_path_factory.mktemp("zwei")
+    engine = db.make_engine(verzeichnis / "test.sqlite3")
+    with Session(engine) as session:
+        erste = process_file(samples["alt"])
+        db.save_document(session, erste)
+        # Gleicher Dateiname, anderer Inhalt: nur jede zweite Zeile.
+        zweite = copy.deepcopy(erste)
+        zweite.file_hash = "zweite" + erste.file_hash[6:]
+        zweite.rows = [zeile for nr, zeile in enumerate(zweite.rows) if nr % 2 == 0]
+        db.save_document(session, zweite)
+
+        roh = aggregate.raw_dataframe(session)
+        matrizen = {p: aggregate.datei_spalten_matrix(session, p)
+                    for p in aggregate.profiles_in_use(session)}
+        ziel = export_excel.export_workbook(
+            verzeichnis / "Auswertung.xlsx",
+            summary=aggregate.column_summary(roh),
+            raw=roh,
+            documents=aggregate.documents_frame(session),
+            footnotes=aggregate.footnotes_frame(session),
+            prices=PREISE,
+            layouts={p: aggregate.vdi_layout_frame(session, p)
+                     for p in aggregate.profiles_in_use(session)},
+            matrizen=matrizen,
+        )
+    return ziel, matrizen
+
+
+def test_jede_zeile_zieht_nur_die_zeilen_ihrer_eigenen_liste(zwei_listen):
+    """Zelle fuer Zelle gegen die Datenbank - je Datei und je Funktionsspalte."""
+    ziel, matrizen = zwei_listen
+    werte = _rechne(ziel)
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+
+    erste = _erste_datenspalte(blatt)
+
+    geprueft = 0
+    for profil, matrix in matrizen.items():
+        profile = get_profile(profil)
+        datensaetze = matrix.to_dict("records")
+        assert len(datensaetze) == 2, "der Fall lebt von zwei Listen"
+        assert datensaetze[0]["Datei"] == datensaetze[1]["Datei"], \
+            "gleicher Dateiname - unterschieden wird ueber den Schluessel"
+        assert datensaetze[0]["Schlüssel"] != datensaetze[1]["Schlüssel"]
+        unterschiedlich = [c.key for c in profile.columns
+                           if datensaetze[0].get(c.key) != datensaetze[1].get(c.key)]
+        assert unterschiedlich, \
+            "die Listen muessen sich unterscheiden, sonst prueft der Test nichts"
+
+        for versatz, record in enumerate(datensaetze):
+            zeile = 6 + versatz
+            assert blatt.cell(zeile, 1).value == record["Datei"]
+            datenpunkte = werte[(name.upper(),
+                                 f"{get_column_letter(erste - 1)}{zeile}")]
+            assert float(datenpunkte) == float(record["Datenpunkte"]), \
+                f"Datenpunkte in Zeile {zeile}"
+            for index, column in enumerate(profile.columns):
+                zelle = f"{get_column_letter(erste + index)}{zeile}"
+                erwartet = float(record.get(column.key, 0.0) or 0.0)
+                assert float(werte[(name.upper(), zelle)]) == pytest.approx(erwartet), \
+                    f"Spalte {column.address} in Zeile {zeile}"
+                geprueft += 1
+    assert geprueft >= 50, "es muessen alle Funktionsspalten beider Zeilen geprueft sein"
+
+
+def _rechne(pfad) -> dict:
+    """Wertet alle Formeln der Mappe aus - Schluessel: (BLATT, "A1")."""
     formulas = pytest.importorskip("formulas", reason="Formelrechner nicht installiert")
     import logging
     import warnings
@@ -163,14 +315,7 @@ def test_zeilensumme_je_datei_stimmt(export):
     warnings.filterwarnings("ignore")
     logging.disable(logging.WARNING)
 
-    ziel, _ = export
-    buch = openpyxl.load_workbook(ziel)
-    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
-    blatt = buch[name]
-    letzte = get_column_letter(blatt.max_column)
-
-    modell = formulas.ExcelModel().loads(str(ziel)).finish()
-    loesung = modell.calculate()
+    loesung = formulas.ExcelModel().loads(str(pfad)).finish().calculate()
     werte = {}
     for schluessel, wert in loesung.items():
         teile = schluessel.split("!")
@@ -180,15 +325,11 @@ def test_zeilensumme_je_datei_stimmt(export):
             werte[(teile[-2].split("]")[-1].strip("'").upper(), teile[-1].strip("'"))] = wert.value[0, 0]
         except Exception:
             continue
+    return werte
 
-    zeile = 6
-    while str(blatt.cell(zeile, 1).value or "").endswith(".pdf"):
-        einzeln = sum(
-            blatt.cell(zeile, spalte).value or 0
-            for spalte in range(_erste_datenspalte(blatt), blatt.max_column)
-            if isinstance(blatt.cell(zeile, spalte).value, (int, float))
-        )
-        gesamt = werte.get((name.upper(), f"{letzte}{zeile}"))
-        assert float(gesamt) == pytest.approx(einzeln)
-        zeile += 1
-    assert zeile > 6, "es muss mindestens eine Dateizeile geben"
+
+def _zahl(werte: dict, blatt: str, spalte: int, zeile: int) -> float:
+    try:
+        return float(werte[(blatt.upper(), f"{get_column_letter(spalte)}{zeile}")])
+    except (KeyError, TypeError, ValueError):
+        return 0.0

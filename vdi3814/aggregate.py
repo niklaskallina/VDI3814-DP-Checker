@@ -18,6 +18,19 @@ RAW_COLUMNS = [
 ]
 
 
+SCHLUESSEL_SPALTE = "Schlüssel"
+
+
+def dokument_schluessel(document: db.Document) -> str:
+    """Eindeutiger Schluessel einer importierten Liste.
+
+    Dateinamen sind nicht eindeutig - dieselbe Liste kann aus zwei Ordnern
+    stammen. Ueber diesen Schluessel verweist die "Uebersicht" im Excel-Export
+    auf genau die Zeilen der "GA-Funktionsliste", die zu dieser Liste gehoeren.
+    """
+    return f"D{document.id}"
+
+
 def _column_address(column_key: str) -> str:
     for profile in load_profiles():
         column = profile.column(column_key)
@@ -271,6 +284,7 @@ def vdi_layout_frame(session: Session, profile_id: str) -> pd.DataFrame:
                 "Datenpunkt": row.klartext,
                 "Benutzeradresse": row.bas,
                 "Typ": row.qualifier,
+                SCHLUESSEL_SPALTE: dokument_schluessel(document),
             }
             for title in column_titles:
                 record[title] = None
@@ -291,7 +305,8 @@ def vdi_layout_frame(session: Session, profile_id: str) -> pd.DataFrame:
             record["Bemerkungen"] = " | ".join(b for b in bemerkungen if b)
             records.append(record)
 
-    return pd.DataFrame(records, columns=kopf + column_titles + ["Bemerkungen"])
+    return pd.DataFrame(
+        records, columns=kopf + column_titles + ["Bemerkungen", SCHLUESSEL_SPALTE])
 
 
 def profiles_in_use(session: Session) -> list[str]:
@@ -455,6 +470,7 @@ def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
             "Gewerk": document.gewerk,
             "Blatt": document.blatt_nr,
             "Datenpunkte": 0,
+            SCHLUESSEL_SPALTE: dokument_schluessel(document),
         }
         for column in profile.columns:
             record[column.key] = 0.0
@@ -473,4 +489,5 @@ def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
                     record[column.column_key] += value.count
         records.append(record)
 
-    return pd.DataFrame(records, columns=kopf + [c.key for c in profile.columns])
+    return pd.DataFrame(
+        records, columns=kopf + [c.key for c in profile.columns] + [SCHLUESSEL_SPALTE])
