@@ -282,8 +282,10 @@ with tab_preview:
         with knopf_speichern:
             if st.button("In Datenbank speichern", type="primary", key=f"save_{name}"):
                 with Session(engine) as session:
-                    dokument = db.save_document(session, ergebnis)
-                st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument.id}).")
+                    # Die Nummer noch innerhalb der Sitzung ablesen - danach
+                    # ist der Datensatz von der Datenbank getrennt.
+                    dokument_id = db.save_document(session, ergebnis).id
+                st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument_id}).")
         st.caption("Gelöschte Zeilen wirken sich erst nach dem Speichern auf Übersicht, "
                    "Kosten und Export aus. Ein erneuter Import der Datei stellt den "
                    "ursprünglichen Stand wieder her.")
@@ -470,12 +472,18 @@ with tab_overview:
 with tab_costs:
     st.subheader("Kostenschätzung")
     st.write("Einheitspreis je Funktionsspalte eintragen – die Kosten werden sofort neu "
-             "berechnet. Gespeicherte Preise gelten auch für den Excel-Export.")
+             "berechnet. Gespeicherte Preise gelten auch für den Excel-Export. "
+             "Ganze Stände lassen sich weiter unten unter einem Namen im Projekt "
+             "ablegen und später wieder aufrufen.")
 
     raw = load_raw()
     with Session(engine) as session:
         gespeicherte_preise = db.get_unit_prices(session)
+        abgelegte = db.list_cost_estimates(session)
     summary = aggregate.column_summary(raw)
+    # Nach dem Laden eines Standes bekommt der Preis-Editor einen neuen
+    # Schluessel - sonst zeigte er weiter die alten Eingaben an.
+    preis_fassung = state().setdefault("preis_fassung", 0)
 
     alle_spalten = st.checkbox("Alle Spalten des Profils anzeigen (auch ohne Mengen)",
                                value=summary.empty)
@@ -498,7 +506,7 @@ with tab_costs:
     if basis is not None:
         bearbeitet = st.data_editor(
             basis, width="stretch", hide_index=True, num_rows="fixed", height=420,
-            key="preis_editor",
+            key=f"preis_editor_{preis_fassung}",
             column_config={
                 "spalte_adresse": st.column_config.TextColumn("Abschnitt.Spalte"),
                 "gruppe": st.column_config.TextColumn("Gruppe"),
@@ -536,6 +544,81 @@ with tab_costs:
                 db.set_unit_prices(session, eingegeben)
             st.success("Einheitspreise gespeichert.")
 
+        # ------------------------------------------------------------------
+        # Ganze Staende im Projekt ablegen
+        # ------------------------------------------------------------------
+        st.divider()
+        st.markdown("**Kostenschätzung im Projekt ablegen**")
+        st.caption("Speichert Mengen, Einheitspreise und Kosten dieser Tabelle unter "
+                   "einem Namen in der Projektdatenbank – etwa „Angebot“ oder "
+                   "„Nachtrag 1“. Ein gleicher Name überschreibt den bisherigen Stand. "
+                   "Beim Laden werden die Einheitspreise wieder eingesetzt; die Mengen "
+                   "kommen immer aus den aktuell importierten Listen.")
+
+        with st.form("kostenschaetzung_ablegen", clear_on_submit=True):
+            name_spalte, bemerkung_spalte = st.columns([1, 2])
+            with name_spalte:
+                stand_name = st.text_input(
+                    "Name", placeholder=f"z. B. Angebot {pd.Timestamp.now():%d.%m.%Y}")
+            with bemerkung_spalte:
+                stand_bemerkung = st.text_input("Bemerkung (freiwillig)", placeholder="")
+            if st.form_submit_button("Kostenschätzung speichern", type="primary"):
+                positionen = bearbeitet.to_dict("records")
+                with Session(engine) as session:
+                    db.save_cost_estimate(session, stand_name, positionen,
+                                          currency=SETTINGS.currency,
+                                          bemerkung=stand_bemerkung)
+                st.success("Kostenschätzung im Projekt abgelegt.")
+                st.rerun()
+
+        if not abgelegte:
+            st.caption("Noch keine Kostenschätzung abgelegt.")
+        else:
+            st.dataframe(pd.DataFrame([
+                {"Name": e["name"], "Positionen": e["positionen"],
+                 "Funktionen": e["menge_gesamt"],
+                 f"Kosten [{e['waehrung']}]": e["kosten_gesamt"],
+                 "Bemerkung": e["bemerkung"],
+                 "Gespeichert am": e["gespeichert_am"].strftime("%d.%m.%Y %H:%M")
+                 if e["gespeichert_am"] else ""}
+                for e in abgelegte
+            ]), width="stretch", hide_index=True)
+
+            namen = {f"{e['name']} ({e['gespeichert_am']:%d.%m.%Y %H:%M})": e["id"]
+                     for e in abgelegte}
+            auswahl = st.selectbox("Abgelegten Stand auswählen", list(namen.keys()),
+                                   key="kostenstand_auswahl")
+            stand_id = namen[auswahl]
+            laden, loeschen, _ = st.columns([1, 1, 2])
+            with laden:
+                if st.button("Preise übernehmen", key="kostenstand_laden",
+                             help="Setzt die Einheitspreise dieses Standes wieder ein – "
+                                  "auch für den Excel-Export."):
+                    with Session(engine) as session:
+                        stand = db.load_cost_estimate(session, stand_id)
+                        if stand:
+                            db.set_unit_prices(session, {
+                                position["spalte_key"]: position["einheitspreis"]
+                                for position in stand["positionen"]
+                                if position["spalte_key"]})
+                    state()["preis_fassung"] = preis_fassung + 1
+                    st.toast("Einheitspreise aus dem abgelegten Stand übernommen.")
+                    st.rerun()
+            with loeschen:
+                if st.button("Stand löschen", key="kostenstand_loeschen"):
+                    with Session(engine) as session:
+                        db.delete_cost_estimate(session, stand_id)
+                    st.rerun()
+
+            with st.expander("Positionen des ausgewählten Standes"):
+                with Session(engine) as session:
+                    stand = db.load_cost_estimate(session, stand_id)
+                if stand:
+                    st.caption(f"{stand['name']} – Funktionen {zahl(stand['menge_gesamt'], 0)}, "
+                               f"Kosten {zahl(stand['kosten_gesamt'])} {stand['waehrung']}")
+                    st.dataframe(pd.DataFrame(stand["positionen"]),
+                                 width="stretch", hide_index=True)
+
 
 # --------------------------------------------------------------------------
 # 6 - Export
@@ -545,12 +628,21 @@ with tab_export:
     st.subheader("Excel-Export")
     st.write("Der Export enthält die Funktionsliste im Original-Layout, die Summen je "
              "Funktionsspalte, ein Kostenblatt mit Formeln sowie alle Rohdaten mit "
-             "Quellenangabe.")
+             "Quellenangabe. Jedes Blatt rechnet mit Formeln: Mengen, Datenpunkte, "
+             "Summen und Kosten hängen an den Zeilen der „GA-Funktionsliste“ und "
+             "rechnen dort sofort mit, wenn Zeilen gelöscht oder ergänzt werden.")
     raw = load_raw()
     if raw.empty:
         st.info("Noch keine Daten gespeichert.")
     else:
         ziel = st.text_input("Zieldatei", value=str(projekt.path / f"{projekt.path.name}_Auswertung.xlsx"))
+        ausblenden = st.checkbox(
+            "Nebenblätter ausblenden", value=True,
+            help="Sichtbar bleiben Übersicht, Schwerpunkte, Mengen je Schwerpunkt, "
+                 "GA-Funktionsliste, Kostenschätzung und Prüfung. Ausgeblendet werden "
+                 + ", ".join(export_excel.NEBENBLAETTER)
+                 + " – sie bleiben in der Datei und rechnen mit; in Excel per "
+                   "Rechtsklick auf einen Blattreiter → „Einblenden“ wieder sichtbar.")
         if st.button("Excel erzeugen", type="primary"):
             with Session(engine) as session:
                 pfad = export_excel.export_workbook(
@@ -569,6 +661,7 @@ with tab_export:
                     schwerpunkte=aggregate.schwerpunkt_summary(raw),
                     schwerpunkt_matrizen={profil: aggregate.schwerpunkt_matrix(session, profil)
                                           for profil in aggregate.profiles_in_use(session)},
+                    nebenblaetter_ausblenden=ausblenden,
                 )
             st.success(f"Geschrieben: {pfad}")
             st.download_button("Datei herunterladen", data=Path(pfad).read_bytes(),

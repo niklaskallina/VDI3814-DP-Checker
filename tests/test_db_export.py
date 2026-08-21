@@ -119,3 +119,75 @@ def test_excel_export_enthaelt_formeln(session, samples, tmp_path):
 
     raw_sheet = book["Rohdaten"]
     assert "datei" in [c.value for c in raw_sheet[1]]                # Quelldatei-Referenz
+
+
+# --------------------------------------------------------------------------
+# Gespeicherter Datensatz bleibt nach dem Schliessen der Sitzung lesbar
+# --------------------------------------------------------------------------
+
+def test_gespeichertes_dokument_bleibt_nach_dem_schliessen_lesbar(tmp_path, samples):
+    """Die Oberflaeche liest die Nummer, wenn die Sitzung schon zu ist.
+
+    Genau daran ist das Speichern in Reiter 2 gescheitert: nach dem commit
+    waren alle Felder als veraltet markiert, und beim Zugriff nach dem
+    Schliessen kam ein DetachedInstanceError statt einer Erfolgsmeldung.
+    """
+    engine = db.make_engine(tmp_path / "test.sqlite3")
+    with Session(engine) as session:
+        dokument = db.save_document(session, process_file(samples["alt"]))
+
+    assert isinstance(dokument.id, int)
+    assert dokument.file_name.endswith(".pdf")
+
+
+# --------------------------------------------------------------------------
+# Abgelegte Kostenschaetzungen
+# --------------------------------------------------------------------------
+
+POSITIONEN = [
+    {"spalte_adresse": "1.1", "gruppe": "Ein-/Ausgabefunktionen", "spalte": "BI",
+     "spalte_key": "A_1_1", "menge": 10.0, "einheitspreis": 45.0},
+    {"spalte_adresse": "1.5", "gruppe": "Ein-/Ausgabefunktionen", "spalte": "AO",
+     "spalte_key": "A_1_5", "menge": 4.0, "einheitspreis": 80.0},
+]
+
+
+def test_kostenschaetzung_ablegen_und_wieder_aufrufen(session):
+    nummer = db.save_cost_estimate(session, "Angebot", POSITIONEN, bemerkung="Erstkalkulation")
+
+    abgelegt = db.list_cost_estimates(session)
+    assert [e["name"] for e in abgelegt] == ["Angebot"]
+    assert abgelegt[0]["positionen"] == 2
+    assert abgelegt[0]["kosten_gesamt"] == pytest.approx(10 * 45.0 + 4 * 80.0)
+    assert abgelegt[0]["bemerkung"] == "Erstkalkulation"
+
+    stand = db.load_cost_estimate(session, nummer)
+    assert [p["spalte_key"] for p in stand["positionen"]] == ["A_1_1", "A_1_5"]
+    assert stand["positionen"][0]["kosten"] == pytest.approx(450.0)
+    assert stand["menge_gesamt"] == pytest.approx(14.0)
+
+
+def test_gleicher_name_schreibt_den_stand_fort(session):
+    db.save_cost_estimate(session, "Angebot", POSITIONEN)
+    teurer = [{**POSITIONEN[0], "einheitspreis": 60.0}]
+    db.save_cost_estimate(session, "Angebot", teurer)
+
+    abgelegt = db.list_cost_estimates(session)
+    assert len(abgelegt) == 1, "derselbe Name darf keine Dublette anlegen"
+    assert abgelegt[0]["kosten_gesamt"] == pytest.approx(600.0)
+
+
+def test_kostenschaetzung_laesst_sich_loeschen(session):
+    nummer = db.save_cost_estimate(session, "Variante", POSITIONEN)
+    db.delete_cost_estimate(session, nummer)
+
+    assert db.list_cost_estimates(session) == []
+    assert db.load_cost_estimate(session, nummer) is None
+    # Die Positionen duerfen nicht als Waisen zurueckbleiben
+    assert session.query(db.CostEstimateItem).count() == 0
+
+
+def test_ohne_namen_bekommt_der_stand_einen_zeitstempel(session):
+    nummer = db.save_cost_estimate(session, "   ", POSITIONEN)
+    stand = db.load_cost_estimate(session, nummer)
+    assert stand["name"].startswith("Stand ")

@@ -333,3 +333,150 @@ def _zahl(werte: dict, blatt: str, spalte: int, zeile: int) -> float:
         return float(werte[(blatt.upper(), f"{get_column_letter(spalte)}{zeile}")])
     except (KeyError, TypeError, ValueError):
         return 0.0
+
+
+# --------------------------------------------------------------------------
+# Alle Blaetter rechnen - und nur die wichtigen stehen vorn
+# --------------------------------------------------------------------------
+
+def test_nebenblaetter_sind_ausgeblendet(export):
+    """Zwoelf Reiter sind zu viel - die Nebenblaetter bleiben im Hintergrund."""
+    from vdi3814 import export_excel as modul
+
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+
+    for name in modul.NEBENBLAETTER:
+        assert name in buch.sheetnames, f"'{name}' darf nicht fehlen, nur ausgeblendet sein"
+        assert buch[name].sheet_state == "hidden", name
+
+    sichtbar = [n for n in buch.sheetnames if buch[n].sheet_state == "visible"]
+    assert any(n.startswith("Übersicht") for n in sichtbar)
+    assert {"Schwerpunkte", "Kostenschätzung", "Prüfung"} <= set(sichtbar)
+    assert any(n.startswith("GA-Funktionsliste") for n in sichtbar)
+    # Eine Mappe, die auf einem ausgeblendeten Blatt aufschlaegt, oeffnet nicht
+    assert buch.active.sheet_state == "visible"
+
+
+def test_jedes_blatt_rechnet_mit_formeln(export):
+    """Kein Blatt darf reine Kopien enthalten - sonst rechnet es nicht mit."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    ohne = [name for name in buch.sheetnames
+            if not any(isinstance(zelle.value, str) and zelle.value.startswith("=")
+                       for zeile in buch[name].iter_rows() for zelle in zeile)]
+    assert not ohne, f"Blaetter ohne jede Formel: {ohne}"
+
+
+def test_schwerpunkte_werden_gezaehlt_statt_kopiert(export):
+    """Das Blatt "Schwerpunkte" muss an der Funktionsliste haengen."""
+    ziel, mengen = export
+    buch = openpyxl.load_workbook(ziel)
+    blatt = buch["Schwerpunkte"]
+    kopf = [zelle.value for zelle in blatt[1]]
+    datenpunkte = get_column_letter(kopf.index("Datenpunkte") + 1)
+    funktionen = get_column_letter(kopf.index("Funktionen") + 1)
+
+    assert str(blatt[f"{datenpunkte}2"].value).startswith("=SUMIFS(")
+    assert str(blatt[f"{funktionen}2"].value).startswith("=SUMIFS(")
+    # Verknuepft wird ueber eine ausgeblendete Spalte, nicht ueber den Namen
+    assert blatt.cell(1, blatt.max_column).value == "Schwerpunkt-Schlüssel"
+    assert blatt.column_dimensions[get_column_letter(blatt.max_column)].hidden
+
+    werte = _rechne(ziel)
+    erwartet = _schwerpunkte_aus_rohdaten(buch)
+    geprueft = 0
+    for zeile in range(2, blatt.max_row):            # letzte Zeile ist die Summe
+        kennung = blatt.cell(zeile, 1).value
+        gerechnet = werte[("SCHWERPUNKTE", f"{funktionen}{zeile}")]
+        assert float(gerechnet) == pytest.approx(erwartet[kennung]), kennung
+        geprueft += 1
+    assert geprueft, "es muss mindestens ein Schwerpunkt ausgewiesen sein"
+
+    summe = werte[("SCHWERPUNKTE", f"{funktionen}{blatt.max_row}")]
+    assert float(summe) == pytest.approx(sum(mengen.values()))
+
+
+def test_mengen_je_schwerpunkt_zaehlen_die_zeilen_ihres_asp(export):
+    """Auch die VDI-Sicht je Schwerpunkt zaehlt, statt Werte zu uebernehmen."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Mengen je Schwerpunkt")][0]
+    blatt = buch[name]
+    erste = _erste_datenspalte(blatt)
+
+    menge = str(blatt.cell(6, erste).value)
+    assert menge.startswith("=SUMIFS("), menge
+    assert "GA-Funktionsliste" in menge
+    assert str(blatt.cell(6, erste - 1).value).startswith("=COUNTIFS(")
+
+    # Zeilensumme je Schwerpunkt gegen die Einzelspalten
+    werte = _rechne(ziel)
+    gesamt_spalte = get_column_letter(blatt.max_column - 2)   # davor: zwei Schluessel
+    zeile = 6
+    while blatt.cell(zeile, 1).value and blatt.cell(zeile, 1).value != "Summe Funktionen":
+        einzeln = sum(_zahl(werte, name, spalte, zeile)
+                      for spalte in range(erste, blatt.max_column - 2))
+        gesamt = werte[(name.upper(), f"{gesamt_spalte}{zeile}")]
+        assert float(gesamt) == pytest.approx(einzeln), f"Zeile {zeile}"
+        zeile += 1
+    assert zeile > 6
+
+
+def test_dokumente_und_info_verweisen_auf_die_uebersicht(export):
+    """Auch die Nebenblaetter zeigen den Stand nach einer Aenderung."""
+    ziel, mengen = export
+    buch = openpyxl.load_workbook(ziel)
+    dokumente = buch["Dokumente"]
+    kopf = [zelle.value for zelle in dokumente[1]]
+    summe_spalte = get_column_letter(kopf.index("summe_funktionen") + 1)
+    assert str(dokumente[f"{summe_spalte}2"].value).startswith("='Übersicht")
+
+    werte = _rechne(ziel)
+    je_datei = [float(werte[("DOKUMENTE", f"{summe_spalte}{zeile}")])
+                for zeile in range(2, dokumente.max_row)]
+    assert sum(je_datei) == pytest.approx(sum(mengen.values()))
+
+    info = buch["Info"]
+    zeilen = {info.cell(z, 1).value: info.cell(z, 2).value for z in range(1, info.max_row + 1)}
+    assert str(zeilen["Funktionen gesamt (Stand Export)"]).startswith("=")
+    assert float(werte[("INFO", "B5")]) == pytest.approx(sum(mengen.values()))
+
+
+def test_geloeschte_zeile_wirkt_bis_in_die_schwerpunkte(export, tmp_path):
+    """Eine geloeschte Zeile muss auch in der ASP-Auswertung fehlen."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    liste = buch[[n for n in buch.sheetnames if n.startswith("GA-Funktionsliste")][0]]
+    blatt = buch["Schwerpunkte"]
+    kopf = [zelle.value for zelle in blatt[1]]
+    funktionen = f"{get_column_letter(kopf.index('Funktionen') + 1)}{blatt.max_row}"
+
+    vorher = float(_rechne(ziel)[("SCHWERPUNKTE", funktionen)])
+    # Zwei Schluesselspalten stehen rechts, davor die Bemerkungen.
+    entfallen = sum(wert for spalte in range(_erste_datenspalte(liste), liste.max_column - 2)
+                    if isinstance(wert := liste.cell(6, spalte).value, (int, float)))
+    assert entfallen > 0, "die geloeschte Zeile muss Mengen enthalten"
+
+    letzte_datenzeile = liste.max_row - 3
+    liste.delete_rows(letzte_datenzeile + 1, 3)      # Summe/Einheitspreis/Kosten
+    liste.delete_rows(6)
+    gekuerzt = tmp_path / "gekuerzt.xlsx"
+    buch.save(gekuerzt)
+
+    nachher = float(_rechne(gekuerzt)[("SCHWERPUNKTE", funktionen)])
+    assert nachher == pytest.approx(vorher - entfallen)
+
+
+def _schwerpunkte_aus_rohdaten(buch) -> dict:
+    """Funktionen je Schwerpunkt - unabhaengig aus dem Blatt "Rohdaten"."""
+    roh = buch["Rohdaten"]
+    kopf = [zelle.value for zelle in roh[1]]
+    kennung_spalte = kopf.index("schwerpunkt") + 1
+    wert_spalte = kopf.index("wert") + 1
+    summen: dict[str, float] = {}
+    for zeile in range(2, roh.max_row):              # letzte Zeile ist die Summe
+        kennung = roh.cell(zeile, kennung_spalte).value
+        wert = roh.cell(zeile, wert_spalte).value
+        summen[kennung] = summen.get(kennung, 0.0) + float(wert or 0.0)
+    return summen

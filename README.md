@@ -37,7 +37,7 @@ entpackt sie und startet `VDI3814-DP-Checker.exe`.
 | **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, einzelne oder mehrere ganze Zeilen löschen, speichern |
 | **3 Nachweis & Differenzen** | Jeden Befund anklicken – die Originalseite wird an der betreffenden Stelle markiert angezeigt |
 | **4 Gesamtübersicht** | Summen über alle Listen, nach Schwerpunkt (ASP/ISP), Projekt/Anlage/Gewerk aufschlüsselbar |
-| **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit |
+| **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit; ganze Stände lassen sich unter einem Namen im Projekt ablegen und später wieder aufrufen |
 | **6 Export** | Excel-Datei mit Funktionsliste, Summen, Kostenblatt und Rohdaten |
 | **7 Projekt & Daten** | Projekte anlegen/löschen, einzelne Dateien aus der Datenbank entfernen |
 
@@ -63,8 +63,8 @@ anlegen, leeren oder vollständig löschen, ebenso einzelne importierte Dateien.
 | **Nachweis** | zu jedem Wert und jeder Abweichung zeigt das Programm die markierte Fundstelle im Original |
 | Vorschau & Korrektur | editierbare Tabelle je Datei; ganze Zeilen lassen sich ankreuzen und gesammelt löschen, erst danach speichern |
 | Projekte | getrennte Datenbanken, jederzeit löschbar |
-| Kostenschätzung | Einheitspreis je Funktionsspalte, sofortige Neuberechnung |
-| Excel-Export | Funktionsliste im Original-Layout, Summen, Kostenblatt **mit Formeln**, Rohdaten, Dokumente, Fußnoten |
+| Kostenschätzung | Einheitspreis je Funktionsspalte, sofortige Neuberechnung; abgelegte Stände („Angebot", „Nachtrag 1") bleiben im Projekt gespeichert und lassen sich vergleichen oder zurückholen |
+| Excel-Export | Funktionsliste im Original-Layout, Summen, Kostenblatt **mit Formeln**, Rohdaten, Dokumente, Fußnoten – **jedes Blatt** rechnet mit Formeln, Nebenblätter sind ausgeblendet |
 
 ---
 
@@ -177,26 +177,43 @@ ASP03) – so, wie Plansätze ihre Zusammenstellung führen.
 | **Schwerpunkte** | Eine Zeile je ASP/ISP: Kennung, Bezeichnung, Anzahl der Datenpunkte und Summe der Funktionen – die Sicht, mit der sich eine Summe auf die einzelnen Automationsschwerpunkte aufteilen lässt |
 | **Mengen je Schwerpunkt** | Dasselbe im VDI-Aufbau: eine Zeile je ASP/ISP mit den Mengen je Funktionsspalte |
 | **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – mit dem ASP/ISP, zu dem er gehört. Die Grundlage der Mengen. **Zeilen dürfen hier gelöscht werden**, die Übersicht rechnet automatisch neu |
-| **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar (Menge als **Formel** auf die Übersicht) |
 | **Kostenschätzung** | Je Spalte: Menge (**Formel** auf die Übersicht), Einheitspreis, Kosten, Gesamtkosten |
-| **Prüfung** | Je Seite der Abgleich mit der Zeile „Summe Funktionen" und jede nicht gezählte Zeile mit Begründung |
-| **Rohdaten** | Jede einzelne Zelle mit Quelldatei, Seite, Zeilennummer, Datenpunkt und Wert |
-| **Dokumente** | Importierte Dateien: Fassung, Verfahren, Metadaten, übersprungene Seiten, Hinweise |
-| **Fußnoten** | Zählregeln aus der Kopfzeile inkl. der Spalten, auf die sie sich beziehen |
+| **Prüfung** | Je Seite der Abgleich mit der Zeile „Summe Funktionen" und jede nicht gezählte Zeile mit Begründung, dazu die gerechnete Differenz |
 
-Alle Mengen und Kosten sind **Formeln**, keine festen Zahlen: Einheitspreise lassen
-sich direkt in der Übersicht eintragen, alles darunter rechnet sofort mit. Die
-Kostenschätzung verweist auf dieselbe Summenzelle – es gibt nur eine Quelle.
+Sichtbar sind damit sechs Reiter – der Arbeitsweg von oben nach unten. Die
+folgenden **Nebenblätter sind ausgeblendet**: sie bleiben in der Datei und
+rechnen mit, stehen aber nicht in der Reiterleiste im Weg. In Excel per
+Rechtsklick auf einen Blattreiter → „Einblenden" jederzeit sichtbar zu machen
+(oder beim Export den Haken „Nebenblätter ausblenden" entfernen):
+
+| Ausgeblendetes Blatt | Inhalt |
+|---|---|
+| **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar (Menge als **Formel** auf die Übersicht) |
+| **Rohdaten** | Jede einzelne Zelle mit Quelldatei, Seite, Zeilennummer, Datenpunkt und Wert |
+| **Dokumente** | Importierte Dateien: Fassung, Verfahren, Metadaten, übersprungene Seiten, Hinweise (Datenpunkte und Funktionen als **Formel** auf die Übersicht) |
+| **Fußnoten** | Zählregeln aus der Kopfzeile inkl. der Spalten, auf die sie sich beziehen |
+| **Projekte** | Kreuztabelle Projekt/Anlage × Spaltengruppe, Randsummen als **Formel** |
+| **Info** | Erstellungsdatum und Eckwerte – die Zählwerte als **Formel** auf die Übersicht |
+
+**Jedes Blatt rechnet mit Formeln**, keine festen Zahlen: Mengen, Datenpunkte,
+Summen und Kosten hängen an den Zeilen der „GA-Funktionsliste", jede Tabelle
+trägt unten eine Summenzeile. Einheitspreise lassen sich direkt in der
+Übersicht eintragen, alles darunter rechnet sofort mit; sie sind das einzige,
+was bewusst eine eingetippte Zahl bleibt. „Schwerpunkte", „Spaltensummen",
+„Kostenschätzung", „Dokumente" und „Info" verweisen auf dieselben Summenzellen
+– es gibt nur eine Quelle.
 
 ### Zeilen in der GA-Funktionsliste löschen
 
 Die „Übersicht" liest ihre Mengen per `SUMIFS` aus der zugehörigen
 „GA-Funktionsliste" – eine Datenpunktzeile dort zu löschen (oder zu ergänzen)
-schlägt deshalb sofort bis in „Spaltensummen" und „Kostenschätzung" durch.
-Verknüpft wird über die **ausgeblendete Spalte „Schlüssel"** ganz rechts auf
-beiden Blättern; sie ordnet jede Zeile ihrer Liste zu, weil Dateinamen nicht
-eindeutig sein müssen. Diese Spalte sollte stehen bleiben. Wird nur die
-Übersicht exportiert (ohne Layoutblatt), bleiben die Mengen feste Werte.
+schlägt deshalb sofort bis in „Mengen je Schwerpunkt", „Schwerpunkte",
+„Spaltensummen", „Kostenschätzung", „Dokumente" und „Info" durch.
+Verknüpft wird über zwei **ausgeblendete Spalten** ganz rechts: „Schlüssel"
+ordnet jede Zeile ihrer Liste zu (Dateinamen müssen nicht eindeutig sein),
+„Schwerpunkt-Schlüssel" zusätzlich ihrem ASP/ISP innerhalb dieser Liste. Beide
+Spalten sollten stehen bleiben. Wird nur die Übersicht exportiert (ohne
+Layoutblatt), bleiben die Mengen feste Werte.
 
 ---
 

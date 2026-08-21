@@ -414,6 +414,9 @@ def schwerpunkt_matrix(session: Session, profile_id: str) -> pd.DataFrame:
                     "Projekt": document.projekt or document.auftraggeber,
                     "Anlage": document.anlage,
                     "Datenpunkte": 0,
+                    # Aus welcher Liste stammt die Zeile? Der Excel-Export
+                    # zieht darueber genau deren Zeilen zusammen.
+                    SCHLUESSEL_SPALTE: dokument_schluessel(document),
                 }
                 for column in profile.columns:
                     record[column.key] = 0.0
@@ -431,7 +434,8 @@ def schwerpunkt_matrix(session: Session, profile_id: str) -> pd.DataFrame:
                     record[column.column_key] += value.count
         records.extend(je_schwerpunkt.values())
 
-    frame = pd.DataFrame(records, columns=kopf + [c.key for c in profile.columns])
+    frame = pd.DataFrame(
+        records, columns=kopf + [c.key for c in profile.columns] + [SCHLUESSEL_SPALTE])
     if frame.empty:
         return frame
     # Nach Kennung sortieren, Zeilen ohne Zuordnung ans Ende

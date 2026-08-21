@@ -74,6 +74,34 @@ def test_oberflaeche_mit_gespeicherten_daten(eigene_ablage, samples):
     assert "Funktionen gesamt" in beschriftungen
 
 
+def test_oberflaeche_zeigt_abgelegte_kostenschaetzungen(eigene_ablage, samples):
+    """Reiter 5 mit einem abgelegten Stand: Liste, Auswahl und Positionen.
+
+    Dieser Zweig wird erst sichtbar, wenn im Projekt schon eine
+    Kostenschaetzung liegt - ohne Test liefe er nie mit.
+    """
+    from sqlalchemy.orm import Session
+
+    from vdi3814 import db, projects
+
+    projekt = projects.resolve(None)
+    engine = db.make_engine(projekt.db_path)
+    with Session(engine) as session:
+        db.save_document(session, process_file(samples["alt"]))
+        db.save_cost_estimate(session, "Angebot", [
+            {"spalte_adresse": "1.1", "gruppe": "Ein-/Ausgabefunktionen", "spalte": "BI",
+             "spalte_key": "A_1_1", "menge": 10.0, "einheitspreis": 45.0},
+        ], bemerkung="Erstkalkulation")
+
+    at = _app()
+    at.run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+
+    texte = " ".join(str(d.value.to_dict()) for d in at.dataframe if hasattr(d.value, "to_dict"))
+    assert "Angebot" in texte
+    assert "Erstkalkulation" in texte
+
+
 # --------------------------------------------------------------------------
 # Reiter 2: ganze Zeilen loeschen
 # --------------------------------------------------------------------------

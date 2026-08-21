@@ -210,6 +210,49 @@ class UnitPrice(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
 
+class CostEstimate(Base):
+    """Eine abgelegte Kostenschaetzung - ein Stand zum Wiederaufrufen.
+
+    Die Einheitspreise (UnitPrice) sind der aktuelle Arbeitsstand des
+    Projekts. Hier liegen dagegen ganze Staende: Mengen, Preise und Kosten
+    zum Zeitpunkt des Speicherns, unter einem eigenen Namen. So lassen sich
+    Varianten ("Angebot", "Nachtrag 1") nebeneinander aufbewahren und
+    vergleichen, ohne dass eine die andere ueberschreibt.
+    """
+
+    __tablename__ = "cost_estimates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(Text, default="")
+    bemerkung: Mapped[str] = mapped_column(Text, default="")
+    currency: Mapped[str] = mapped_column(String(8), default="EUR")
+    menge_gesamt: Mapped[float] = mapped_column(Float, default=0.0)
+    kosten_gesamt: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    positionen: Mapped[list["CostEstimateItem"]] = relationship(
+        back_populates="estimate", cascade="all, delete-orphan")
+
+
+class CostEstimateItem(Base):
+    """Eine Zeile einer abgelegten Kostenschaetzung."""
+
+    __tablename__ = "cost_estimate_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    estimate_id: Mapped[int] = mapped_column(
+        ForeignKey("cost_estimates.id", ondelete="CASCADE"), index=True)
+    column_key: Mapped[str] = mapped_column(String(32), default="")
+    spalte_adresse: Mapped[str] = mapped_column(String(32), default="")
+    gruppe: Mapped[str] = mapped_column(Text, default="")
+    label: Mapped[str] = mapped_column(Text, default="")
+    menge: Mapped[float] = mapped_column(Float, default=0.0)
+    price: Mapped[float] = mapped_column(Float, default=0.0)
+    kosten: Mapped[float] = mapped_column(Float, default=0.0)
+
+    estimate: Mapped[CostEstimate] = relationship(back_populates="positionen")
+
+
 # --------------------------------------------------------------------------
 # Verbindung
 # --------------------------------------------------------------------------
@@ -402,6 +445,11 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
 
     _store_source(session, document, result)
     session.commit()
+    # Nach dem commit sind alle Felder als "veraltet" markiert. Wer den
+    # Datensatz nach dem Schliessen der Sitzung noch anfasst - etwa fuer die
+    # Meldung "Dokument 7 gespeichert" - bekaeme sonst einen
+    # DetachedInstanceError. Einmal nachladen laesst die Werte stehen.
+    session.refresh(document)
     return document
 
 
@@ -541,3 +589,110 @@ def set_unit_price(session: Session, column_key: str, price: float, label: str =
 def set_unit_prices(session: Session, prices: dict[str, float], profile_id: str = "") -> None:
     for key, value in prices.items():
         set_unit_price(session, key, value, profile_id=profile_id)
+
+
+# --------------------------------------------------------------------------
+# Abgelegte Kostenschaetzungen
+# --------------------------------------------------------------------------
+
+# Die folgenden Funktionen geben bewusst schlichte dicts zurueck und keine
+# ORM-Objekte: die Oberflaeche arbeitet ausserhalb der Sitzung weiter, und ein
+# getrennter Datensatz waere dort nicht mehr lesbar.
+
+def save_cost_estimate(session: Session, name: str, positionen: Iterable[dict],
+                       currency: str | None = None, bemerkung: str = "") -> int:
+    """Legt eine Kostenschaetzung unter einem Namen ab.
+
+    Ein bereits vorhandener Name wird ueberschrieben - so laesst sich ein
+    Stand fortschreiben, ohne dass Dubletten entstehen. Rueckgabe ist die
+    Nummer des Datensatzes.
+    """
+    name = (name or "").strip() or datetime.now().strftime("Stand %d.%m.%Y %H:%M")
+    vorhanden = session.scalars(
+        select(CostEstimate).where(CostEstimate.name == name)).first()
+    if vorhanden is not None:
+        session.delete(vorhanden)
+        session.flush()
+
+    zeilen = [
+        {
+            "column_key": str(position.get("spalte_key", "")),
+            "spalte_adresse": str(position.get("spalte_adresse", "")),
+            "gruppe": str(position.get("gruppe", "")),
+            "label": str(position.get("spalte", "")),
+            "menge": float(position.get("menge", 0.0) or 0.0),
+            "price": float(position.get("einheitspreis", 0.0) or 0.0),
+        }
+        for position in positionen
+    ]
+    for zeile in zeilen:
+        zeile["kosten"] = zeile["menge"] * zeile["price"]
+
+    estimate = CostEstimate(
+        name=name,
+        bemerkung=bemerkung,
+        currency=currency or SETTINGS.currency,
+        menge_gesamt=sum(zeile["menge"] for zeile in zeilen),
+        kosten_gesamt=sum(zeile["kosten"] for zeile in zeilen),
+        created_at=datetime.now(),
+    )
+    session.add(estimate)
+    session.flush()
+    for zeile in zeilen:
+        session.add(CostEstimateItem(estimate_id=estimate.id, **zeile))
+    session.commit()
+    return int(estimate.id)
+
+
+def list_cost_estimates(session: Session) -> list[dict]:
+    """Alle abgelegten Kostenschaetzungen, neueste zuerst."""
+    return [
+        {
+            "id": int(estimate.id),
+            "name": estimate.name,
+            "bemerkung": estimate.bemerkung,
+            "waehrung": estimate.currency,
+            "positionen": len(estimate.positionen),
+            "menge_gesamt": float(estimate.menge_gesamt),
+            "kosten_gesamt": float(estimate.kosten_gesamt),
+            "gespeichert_am": estimate.created_at,
+        }
+        for estimate in session.scalars(
+            select(CostEstimate).order_by(CostEstimate.created_at.desc()))
+    ]
+
+
+def load_cost_estimate(session: Session, estimate_id: int) -> dict | None:
+    """Eine abgelegte Kostenschaetzung mit allen Positionen."""
+    estimate = session.get(CostEstimate, int(estimate_id))
+    if estimate is None:
+        return None
+    return {
+        "id": int(estimate.id),
+        "name": estimate.name,
+        "bemerkung": estimate.bemerkung,
+        "waehrung": estimate.currency,
+        "menge_gesamt": float(estimate.menge_gesamt),
+        "kosten_gesamt": float(estimate.kosten_gesamt),
+        "gespeichert_am": estimate.created_at,
+        "positionen": [
+            {
+                "spalte_adresse": position.spalte_adresse,
+                "gruppe": position.gruppe,
+                "spalte": position.label,
+                "spalte_key": position.column_key,
+                "menge": float(position.menge),
+                "einheitspreis": float(position.price),
+                "kosten": float(position.kosten),
+            }
+            for position in sorted(estimate.positionen, key=lambda p: p.id)
+        ],
+    }
+
+
+def delete_cost_estimate(session: Session, estimate_id: int) -> None:
+    estimate = session.get(CostEstimate, int(estimate_id))
+    if estimate is None:
+        return
+    session.delete(estimate)
+    session.commit()
