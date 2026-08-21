@@ -144,12 +144,18 @@ Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten S
 
 | Blatt | Inhalt |
 |---|---|
-| **Übersicht** | Summe je Funktionsspalte über alle importierten Listen, mit Abschnitt.Spalte, Gruppe, Anzahl Dateien; unten „Summe Funktionen“ als Summenformel |
-| **Kostenschätzung** | je Spalte: Menge als **Formel** auf „Übersicht“, Einheitspreis, Kosten `= Menge × Einheitspreis`, Gesamtkosten als Summenformel – in Excel direkt weiterrechenbar |
-| **Rohdaten** | jede einzelne Zelle mit Quelldatei, Seite, Zeilennummer, Datenpunkt, BAS, Spalte und Wert |
-| **Dokumente** | importierte Dateien: Fassung, Erkennungsverfahren, Metadaten, ausgewertete und **übersprungene** Seiten, Hinweise |
+| **Übersicht** | Das VDI-3814-Blatt für die Kalkulation: **eine Zeile je importierter Liste** mit ihren Mengen je Funktionsspalte, rechts die Gesamtzahl der Funktionen dieser Liste. Darunter „Summe Funktionen" (Formel), eine Zeile für **Einheitspreise** und die daraus berechneten Kosten. Liegen beide Fassungen vor, gibt es je Fassung ein Blatt |
+| **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – die Grundlage der Mengen |
+| **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar |
+| **Kostenschätzung** | Je Spalte: Menge (**Formel** auf die Übersicht), Einheitspreis, Kosten, Gesamtkosten |
+| **Prüfung** | Je Seite der Abgleich mit der Zeile „Summe Funktionen" und jede nicht gezählte Zeile mit Begründung |
+| **Rohdaten** | Jede einzelne Zelle mit Quelldatei, Seite, Zeilennummer, Datenpunkt und Wert |
+| **Dokumente** | Importierte Dateien: Fassung, Verfahren, Metadaten, übersprungene Seiten, Hinweise |
 | **Fußnoten** | Zählregeln aus der Kopfzeile inkl. der Spalten, auf die sie sich beziehen |
-| **Projekte** | Kreuztabelle Projekt/Anlage × Spaltengruppe |
+
+Alle Mengen und Kosten sind **Formeln**, keine festen Zahlen: Einheitspreise lassen
+sich direkt in der Übersicht eintragen, alles darunter rechnet sofort mit. Die
+Kostenschätzung verweist auf dieselbe Summenzelle – es gibt nur eine Quelle.
 
 ---
 

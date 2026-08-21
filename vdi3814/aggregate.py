@@ -303,3 +303,50 @@ def pruefbericht(session: Session) -> pd.DataFrame:
         "datei", "art", "spalte", "bezeichnung", "seite", "zeile",
         "wert_liste", "wert_eigene_zaehlung", "bewertung", "begruendung",
     ])
+
+
+def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
+    """Mengen je Datei und Funktionsspalte - die Grundlage der Uebersicht.
+
+    Eine Zeile je importierter Datei, eine Spalte je Funktionsspalte des
+    Profils. Genau die Form, in der die Mengen fuer die Kalkulation gebraucht
+    werden: was steckt in welcher Liste, und was ergibt das in Summe.
+    """
+    profile = get_profile(profile_id)
+    if profile is None:
+        return pd.DataFrame()
+
+    kopf = ["Datei", "Projekt", "Anlage", "Gewerk", "Blatt", "Datenpunkte"]
+    records: list[dict] = []
+    for document in session.scalars(
+        select(db.Document).order_by(db.Document.file_name)
+    ):
+        if document.profile_id != profile_id:
+            continue
+        columns = {c.idx: c for c in document.columns}
+        record = {
+            "Datei": document.file_name,
+            "Projekt": document.projekt or document.auftraggeber,
+            "Anlage": document.anlage,
+            "Gewerk": document.gewerk,
+            "Blatt": document.blatt_nr,
+            "Datenpunkte": 0,
+        }
+        for column in profile.columns:
+            record[column.key] = 0.0
+
+        for row in document.rows:
+            if row.kind != "daten" or not row.is_countable:
+                continue
+            record["Datenpunkte"] += 1
+            for value in row.values:
+                if value.count is None:
+                    continue
+                column = columns.get(value.column_idx)
+                if column is None or not column.column_key:
+                    continue
+                if column.column_key in record:
+                    record[column.column_key] += value.count
+        records.append(record)
+
+    return pd.DataFrame(records, columns=kopf + [c.key for c in profile.columns])

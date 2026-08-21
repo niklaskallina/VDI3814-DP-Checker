@@ -14,3 +14,5 @@ pytesseract>=0.3.10    # benoetigt zusaetzlich die Tesseract-Installation (siehe
 
 # Entwicklung
 pytest>=8.0
+# Optional fuer die Formelpruefung der Tests (nicht im Programm noetig):
+#   pip install formulas

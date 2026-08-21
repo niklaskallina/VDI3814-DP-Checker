@@ -98,18 +98,24 @@ def test_excel_export_enthaelt_formeln(session, samples, tmp_path):
         footnotes=aggregate.footnotes_frame(session),
         prices={"A_1_5": 80.0},
         projects=aggregate.pivot_projects(frame),
+        matrizen={profil: aggregate.datei_spalten_matrix(session, profil)
+                  for profil in aggregate.profiles_in_use(session)},
     )
 
     book = openpyxl.load_workbook(target)
-    assert {"Übersicht", "Kostenschätzung", "Rohdaten", "Dokumente", "Fußnoten"} <= set(book.sheetnames)
+    assert {"Kostenschätzung", "Spaltensummen", "Rohdaten", "Dokumente",
+            "Fußnoten"} <= set(book.sheetnames)
+    assert any(name.startswith("Übersicht") for name in book.sheetnames)
 
     costs = book["Kostenschätzung"]
-    assert str(costs.cell(2, 6).value).startswith("='Übersicht'!")   # Menge als Formel
+    # Die Menge verweist auf die Summenzeile der Uebersicht - eine Quelle,
+    # keine Kopie.
+    assert str(costs.cell(2, 6).value).startswith("='Übersicht")
     assert costs.cell(2, 8).value == "=F2*G2"                        # Kosten als Formel
     assert str(costs.cell(costs.max_row, 8).value).startswith("=SUM(")
 
-    overview = book["Übersicht"]
-    assert overview.cell(overview.max_row, 1).value == "Summe Funktionen"
+    spaltensummen = book["Spaltensummen"]
+    assert spaltensummen.cell(spaltensummen.max_row, 1).value == "Summe Funktionen"
 
     raw_sheet = book["Rohdaten"]
     assert "datei" in [c.value for c in raw_sheet[1]]                # Quelldatei-Referenz

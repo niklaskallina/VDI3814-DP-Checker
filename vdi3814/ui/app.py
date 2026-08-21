@@ -25,7 +25,7 @@ from vdi3814.config import SETTINGS                                     # noqa: 
 from vdi3814.costs import apply_prices, price_template, total_cost      # noqa: E402
 from vdi3814.models import Cell, DocumentResult, RowKind                         # noqa: E402
 from vdi3814.pipeline import process_file                               # noqa: E402
-from vdi3814.profiles_loader import load_profiles                       # noqa: E402
+from vdi3814.profiles_loader import get_profile, load_profiles                       # noqa: E402
 from vdi3814.vision import ocr                                          # noqa: E402
 
 ROW_FIELDS = ["Zeile", "Datenpunkt", "Benutzeradresse", "Typ", "Bemerkung"]
@@ -394,6 +394,34 @@ with tab_overview:
         kennzahlen[2].metric("Funktionen gesamt", f"{gefiltert['wert'].sum():g}")
         kennzahlen[3].metric("Belegte Funktionsspalten", gefiltert["spalte_key"].nunique())
 
+        # Kernansicht: das VDI-Blatt mit einer Zeile je Datei - genau so wird
+        # es auch exportiert.
+        st.markdown("**GA-Funktionsliste – Mengen je Datei und Funktionsspalte**")
+        st.caption("Eine Zeile je importierter Liste, unten die Gesamtsumme. "
+                   "Spaltentitel: Abschnitt.Spalte · Bezeichnung — genauso im Excel-Export.")
+        with Session(engine) as session:
+            for profil in aggregate.profiles_in_use(session):
+                matrix = aggregate.datei_spalten_matrix(session, profil)
+                if matrix.empty:
+                    continue
+                profile = get_profile(profil)
+                anzeige = matrix.copy()
+                titel = {c.key: f"{c.address} · {c.label}" for c in profile.columns}
+                belegt = [c.key for c in profile.columns if float(anzeige[c.key].sum()) != 0.0]
+                anzeige["Funktionen gesamt"] = anzeige[[c.key for c in profile.columns]].sum(axis=1)
+                spalten = ["Datei", "Projekt", "Anlage", "Datenpunkte", "Funktionen gesamt"] + belegt
+                anzeige = anzeige[spalten].rename(columns=titel)
+                summenzeile = {spalte: "" for spalte in anzeige.columns}
+                summenzeile["Datei"] = "Summe Funktionen"
+                for spalte in anzeige.columns[3:]:
+                    summenzeile[spalte] = anzeige[spalte].sum()
+                anzeige = pd.concat([anzeige, pd.DataFrame([summenzeile])], ignore_index=True)
+                if len(aggregate.profiles_in_use(session)) > 1:
+                    st.markdown(f"*Fassung {profile.fassung}*")
+                st.dataframe(anzeige, width="stretch", hide_index=True)
+                st.caption(f"Nur belegte Spalten angezeigt ({len(belegt)} von "
+                           f"{len(profile.columns)}); der Export enthält alle.")
+
         st.markdown("**Summen je Funktionsspalte**")
         st.dataframe(aggregate.column_summary(gefiltert), width="stretch", hide_index=True)
         links, rechts = st.columns(2)
@@ -509,6 +537,8 @@ with tab_export:
                     layouts={profil: aggregate.vdi_layout_frame(session, profil)
                              for profil in aggregate.profiles_in_use(session)},
                     pruefung=aggregate.pruefbericht(session),
+                    matrizen={profil: aggregate.datei_spalten_matrix(session, profil)
+                              for profil in aggregate.profiles_in_use(session)},
                 )
             st.success(f"Geschrieben: {pfad}")
             st.download_button("Datei herunterladen", data=Path(pfad).read_bytes(),

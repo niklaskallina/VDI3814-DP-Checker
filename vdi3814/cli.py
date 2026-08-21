@@ -195,6 +195,8 @@ def cmd_export(args) -> int:
             layouts={profile_id: aggregate.vdi_layout_frame(session, profile_id)
                      for profile_id in aggregate.profiles_in_use(session)},
             pruefung=aggregate.pruefbericht(session),
+            matrizen={profile_id: aggregate.datei_spalten_matrix(session, profile_id)
+                      for profile_id in aggregate.profiles_in_use(session)},
         )
     print(f"Export geschrieben: {path}")
     return 0

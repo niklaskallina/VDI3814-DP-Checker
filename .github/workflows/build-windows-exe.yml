@@ -45,6 +45,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller==6.*
+          pip install formulas   # rechnet die Excel-Formeln im Test nach
 
       - name: Texterkennung (Tesseract) beilegen
         shell: pwsh

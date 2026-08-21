@@ -66,8 +66,13 @@ def _autosize(sheet: Worksheet, maximum: int = 55) -> None:
         sheet.column_dimensions[letter].width = min(max(10, width + 2), maximum)
 
 
-def _sheet_overview(workbook: Workbook, summary: pd.DataFrame) -> int:
-    sheet = workbook.create_sheet("Übersicht")
+def _sheet_spaltensummen(workbook: Workbook, summary: pd.DataFrame) -> int:
+    """Flache Liste aller Funktionsspalten mit ihrer Gesamtmenge.
+
+    Ergaenzt die Uebersicht im VDI-Aufbau: hier laesst sich nach Gruppe oder
+    Menge sortieren und filtern.
+    """
+    sheet = workbook.create_sheet("Spaltensummen")
     frame = summary.rename(columns={
         "spalte_adresse": "Abschnitt.Spalte",
         "spalte_key": "Spaltenschluessel",
@@ -96,7 +101,8 @@ def _sheet_overview(workbook: Workbook, summary: pd.DataFrame) -> int:
 
 
 def _sheet_costs(workbook: Workbook, summary: pd.DataFrame, prices: dict[str, float],
-                 menge_col: int, currency: str) -> None:
+                 menge_col: int, currency: str,
+                 bezuege: dict[str, str] | None = None) -> None:
     sheet = workbook.create_sheet("Kostenschätzung")
     headers = ["Abschnitt.Spalte", "Gruppe", "Untergruppe", "Funktionsspalte",
                "Spaltenschluessel", "Menge", f"Einheitspreis [{currency}]", f"Kosten [{currency}]"]
@@ -115,7 +121,11 @@ def _sheet_costs(workbook: Workbook, summary: pd.DataFrame, prices: dict[str, fl
         sheet.cell(row=offset, column=3, value=record.untergruppe)
         sheet.cell(row=offset, column=4, value=record.spalte)
         sheet.cell(row=offset, column=5, value=record.spalte_key)
-        sheet.cell(row=offset, column=6, value=f"='Übersicht'!{menge_letter}{offset}")
+        # Menge als Formel: bevorzugt auf die Summenzeile der VDI-Uebersicht,
+        # sonst auf die flache Spaltenliste. So gibt es nur eine Quelle.
+        bezug = (bezuege or {}).get(record.spalte_key)
+        sheet.cell(row=offset, column=6,
+                   value=f"={bezug}" if bezug else f"='Spaltensummen'!{menge_letter}{offset}")
         price_cell = sheet.cell(row=offset, column=7, value=float(prices.get(record.spalte_key, 0.0)))
         price_cell.number_format = "#,##0.00"
         cost_cell = sheet.cell(row=offset, column=8, value=f"=F{offset}*G{offset}")
@@ -143,7 +153,8 @@ def export_workbook(path: str | Path,
                     projects: pd.DataFrame | None = None,
                     currency: str | None = None,
                     layouts: dict[str, pd.DataFrame] | None = None,
-                    pruefung: pd.DataFrame | None = None) -> Path:
+                    pruefung: pd.DataFrame | None = None,
+                    matrizen: dict[str, pd.DataFrame] | None = None) -> Path:
     """Schreibt die vollstaendige Auswertung als .xlsx."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,10 +164,21 @@ def export_workbook(path: str | Path,
     workbook = Workbook()
     workbook.remove(workbook.active)
 
-    # Zuerst die Funktionslisten im Original-Layout - das ist die Sicht, in der
-    # die Datenpunkte geprueft und kalkuliert werden.
     from .profiles_loader import get_profile
 
+    # Zuerst die Uebersicht im Aufbau der VDI-Funktionsliste: eine Zeile je
+    # importierter Datei, darunter Summe, Einheitspreis und Kosten.
+    bezuege: dict[str, str] = {}
+    mehrere = len(matrizen or {}) > 1
+    for profile_id, matrix in (matrizen or {}).items():
+        profile = get_profile(profile_id)
+        if profile is None or matrix is None or matrix.empty:
+            continue
+        titel = (f"Übersicht {profile.fassung}" if mehrere else "Übersicht")[:31]
+        bezuege.update(_sheet_uebersicht_vdi(workbook, titel, profile, matrix, prices, currency))
+
+    # Danach die Funktionslisten im Original-Layout - dort stehen die einzelnen
+    # Datenpunkte, auf denen die Mengen beruhen.
     for profile_id, frame in (layouts or {}).items():
         profile = get_profile(profile_id)
         if profile is None or frame is None or frame.empty:
@@ -164,8 +186,8 @@ def export_workbook(path: str | Path,
         titel = f"GA-Funktionsliste {profile.fassung}"[:31]
         _sheet_vdi_layout(workbook, titel, frame, profile, prices, currency)
 
-    menge_col = _sheet_overview(workbook, summary)
-    _sheet_costs(workbook, summary, prices, menge_col, currency)
+    menge_col = _sheet_spaltensummen(workbook, summary)
+    _sheet_costs(workbook, summary, prices, menge_col, currency, bezuege)
 
     if pruefung is not None and not pruefung.empty:
         _write_frame(workbook.create_sheet("Prüfung"), pruefung)
@@ -196,6 +218,169 @@ def export_workbook(path: str | Path,
 # --------------------------------------------------------------------------
 
 ROW_FIELD_COUNT = 6      # Datei, Blatt, Zeile Nr., Datenpunkt, Benutzeradresse, Typ
+
+
+def _schreibe_vdi_kopf(sheet: Worksheet, columns: list, kopf_titel: list[str],
+                       schluss_titel: str | None = None) -> tuple[int, int]:
+    """Schreibt den Tabellenkopf im Aufbau der VDI-Vorlage.
+
+    Zeile 1/2 Gruppe und Untergruppe (zusammengefasst), Zeile 3 die senkrechte
+    Spaltenbezeichnung, Zeile 4/5 die Nummernzeilen "Abschnitt" und "Spalte".
+
+    Rueckgabe: (erste Datenspalte, erste Datenzeile).
+    """
+    feld_anzahl = len(kopf_titel)
+    erste_spalte = feld_anzahl + 1
+
+    for zeile, attribut in ((1, "group"), (2, "subgroup")):
+        start = erste_spalte
+        for index in range(len(columns) + 1):
+            aktuell = getattr(columns[index], attribut) if index < len(columns) else None
+            vorher = getattr(columns[index - 1], attribut) if index else None
+            if index and aktuell != vorher:
+                ende = erste_spalte + index - 1
+                cell = sheet.cell(row=zeile, column=start, value=vorher)
+                cell.font = HEADER_FONT
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.fill = GROUP_FILL
+                if ende > start:
+                    sheet.merge_cells(start_row=zeile, start_column=start,
+                                      end_row=zeile, end_column=ende)
+                start = erste_spalte + index
+
+    for index, column in enumerate(columns):
+        cell = sheet.cell(row=3, column=erste_spalte + index, value=column.label)
+        cell.alignment = Alignment(textRotation=90, horizontal="center", vertical="bottom")
+        cell.font = Font(size=8)
+        cell.border = BOX
+    sheet.row_dimensions[3].height = 150
+
+    for zeile, beschriftung in ((4, "Abschnitt"), (5, "Spalte")):
+        cell = sheet.cell(row=zeile, column=feld_anzahl, value=beschriftung)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(horizontal="right")
+    for index, column in enumerate(columns):
+        abschnitt, _, nummer = column.address.rpartition(".")
+        for zeile, wert in ((4, abschnitt or column.address), (5, nummer)):
+            cell = sheet.cell(row=zeile, column=erste_spalte + index, value=wert)
+            cell.alignment = Alignment(horizontal="center")
+            cell.font = Font(size=8, bold=True)
+            cell.fill = HEADER_FILL
+            cell.border = BOX
+
+    for index, titel in enumerate(kopf_titel):
+        cell = sheet.cell(row=1, column=1 + index, value=titel)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.merge_cells(start_row=1, start_column=1 + index, end_row=3, end_column=1 + index)
+
+    if schluss_titel:
+        spalte = erste_spalte + len(columns)
+        cell = sheet.cell(row=1, column=spalte, value=schluss_titel)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.merge_cells(start_row=1, start_column=spalte, end_row=3, end_column=spalte)
+
+    sheet.freeze_panes = sheet.cell(row=6, column=erste_spalte)
+    return erste_spalte, 6
+
+
+def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.DataFrame,
+                          prices: dict[str, float], currency: str) -> dict[str, str]:
+    """Uebersicht im Aufbau der VDI-Funktionsliste - eine Zeile je Datei.
+
+    Das ist die Sicht fuer die Kalkulation: welche Mengen stecken in welcher
+    Liste, was ergibt das in Summe, und was kostet es bei welchem
+    Einheitspreis. Alle Summen und Kosten sind Formeln.
+
+    Rueckgabe: je Spaltenschluessel der Bezug auf die Summenzelle, damit die
+    Kostenschaetzung auf dieselbe Zahl verweist statt sie zu kopieren.
+    """
+    sheet = workbook.create_sheet(title)
+    columns = list(profile.columns)
+    kopf_titel = ["Datei", "Projekt", "Anlage", "Gewerk", "Blatt", "Datenpunkte"]
+    erste_spalte, erste_zeile = _schreibe_vdi_kopf(
+        sheet, columns, kopf_titel, schluss_titel=f"Funktionen gesamt")
+    letzte_spalte = erste_spalte + len(columns) - 1
+    summe_spalte = erste_spalte + len(columns)
+
+    zeile = erste_zeile
+    for record in matrix.to_dict("records"):
+        for index, titel in enumerate(kopf_titel):
+            wert = record.get(titel, "")
+            cell = sheet.cell(row=zeile, column=1 + index, value=_clean(wert))
+            cell.border = BOX
+        for index, column in enumerate(columns):
+            menge = float(record.get(column.key, 0.0) or 0.0)
+            cell = sheet.cell(row=zeile, column=erste_spalte + index,
+                              value=menge if menge else None)
+            cell.alignment = Alignment(horizontal="center")
+            cell.border = BOX
+        gesamt = sheet.cell(
+            row=zeile, column=summe_spalte,
+            value=f"=SUM({get_column_letter(erste_spalte)}{zeile}:"
+                  f"{get_column_letter(letzte_spalte)}{zeile})")
+        gesamt.font = HEADER_FONT
+        gesamt.border = BOX
+        zeile += 1
+
+    letzte_datenzeile = zeile - 1
+    summenzeile = zeile
+    preiszeile = zeile + 1
+    kostenzeile = zeile + 2
+
+    beschriftung = {summenzeile: "Summe Funktionen",
+                    preiszeile: f"Einheitspreis [{currency}]",
+                    kostenzeile: f"Kosten [{currency}]"}
+    for nummer, text in beschriftung.items():
+        cell = sheet.cell(row=nummer, column=1, value=text)
+        cell.font = HEADER_FONT
+        for spalte in range(1, summe_spalte + 1):
+            sheet.cell(row=nummer, column=spalte).fill = TOTAL_FILL
+
+    bezuege: dict[str, str] = {}
+    for index, column in enumerate(columns):
+        buchstabe = get_column_letter(erste_spalte + index)
+        summe = sheet.cell(row=summenzeile, column=erste_spalte + index)
+        if letzte_datenzeile >= erste_zeile:
+            summe.value = f"=SUM({buchstabe}{erste_zeile}:{buchstabe}{letzte_datenzeile})"
+        else:
+            summe.value = 0
+        summe.font = HEADER_FONT
+        summe.border = BOX
+
+        preis = sheet.cell(row=preiszeile, column=erste_spalte + index,
+                           value=float(prices.get(column.key, 0.0)))
+        preis.number_format = "#,##0.00"
+        preis.border = BOX
+
+        kosten = sheet.cell(row=kostenzeile, column=erste_spalte + index,
+                            value=f"={buchstabe}{summenzeile}*{buchstabe}{preiszeile}")
+        kosten.number_format = "#,##0.00"
+        kosten.border = BOX
+
+        bezuege[column.key] = f"'{title}'!{buchstabe}{summenzeile}"
+
+    erste = get_column_letter(erste_spalte)
+    letzte = get_column_letter(letzte_spalte)
+    gesamtmenge = sheet.cell(row=summenzeile, column=summe_spalte,
+                             value=f"=SUM({erste}{summenzeile}:{letzte}{summenzeile})")
+    gesamtmenge.font = HEADER_FONT
+    gesamtkosten = sheet.cell(row=kostenzeile, column=summe_spalte,
+                              value=f"=SUM({erste}{kostenzeile}:{letzte}{kostenzeile})")
+    gesamtkosten.font = HEADER_FONT
+    gesamtkosten.number_format = "#,##0.00"
+
+    sheet.cell(row=preiszeile, column=summe_spalte, value="je Funktion").font = Font(italic=True, size=8)
+    for spalte in range(1, 7):
+        sheet.column_dimensions[get_column_letter(spalte)].width = 22 if spalte == 1 else 16
+    for spalte in range(erste_spalte, summe_spalte + 1):
+        sheet.column_dimensions[get_column_letter(spalte)].width = 6
+    sheet.column_dimensions[get_column_letter(summe_spalte)].width = 14
+    return bezuege
 
 
 def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profile,
