@@ -34,7 +34,7 @@ entpackt sie und startet `VDI3814-DP-Checker.exe`.
 | Reiter | Wozu |
 |---|---|
 | **1 Import** | Dateien auswählen (mehrere gleichzeitig) und einlesen |
-| **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, speichern |
+| **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, einzelne oder mehrere ganze Zeilen löschen, speichern |
 | **3 Nachweis & Differenzen** | Jeden Befund anklicken – die Originalseite wird an der betreffenden Stelle markiert angezeigt |
 | **4 Gesamtübersicht** | Summen über alle Listen, nach Schwerpunkt (ASP/ISP), Projekt/Anlage/Gewerk aufschlüsselbar |
 | **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit |
@@ -61,7 +61,7 @@ anlegen, leeren oder vollständig löschen, ebenso einzelne importierte Dateien.
 | **Automations-/Informationsschwerpunkt** | ASP/ISP wird aus Kopf-/Fußbereich, Anlagenangabe oder der Zeile selbst gelesen; jede Auswertung weist aus, wie viele Datenpunkte und Funktionen auf welchen ASP bzw. ISP entfallen |
 | Kontrolle | die eigene Summe wird gegen die Zeile „Summe Funktionen" der Liste geprüft |
 | **Nachweis** | zu jedem Wert und jeder Abweichung zeigt das Programm die markierte Fundstelle im Original |
-| Vorschau & Korrektur | editierbare Tabelle je Datei, erst danach speichern |
+| Vorschau & Korrektur | editierbare Tabelle je Datei; ganze Zeilen lassen sich ankreuzen und gesammelt löschen, erst danach speichern |
 | Projekte | getrennte Datenbanken, jederzeit löschbar |
 | Kostenschätzung | Einheitspreis je Funktionsspalte, sofortige Neuberechnung |
 | Excel-Export | Funktionsliste im Original-Layout, Summen, Kostenblatt **mit Formeln**, Rohdaten, Dokumente, Fußnoten |
