@@ -53,6 +53,7 @@ datas += [
 
 hiddenimports = collect_submodules("streamlit") + [
     "vdi3814.ui.app",
+    "vdi3814.ui.table",  # von app.py importiert, das nur als Skript mitgeliefert wird
     "xlrd",              # nur fuer .xls, wird erst zur Laufzeit importiert
     "pytesseract",       # optionales OCR, ebenfalls verzoegert importiert
     "pymupdf",

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Iterable
 
 
 class RowKind(str, Enum):
@@ -243,6 +243,23 @@ class DocumentResult:
     def excluded_rows(self) -> list[DataPointRow]:
         """Nicht gezaehlte Zeilen inkl. Begruendung - fuer den Pruefbericht."""
         return [r for r in self.rows if r.kind is not RowKind.DATEN]
+
+    def remove_data_rows(self, positions: Iterable[int]) -> int:
+        """Entfernt Datenpunktzeilen anhand ihrer Position in data_rows().
+
+        Genau diese Reihenfolge zeigt die Korrekturtabelle der Oberflaeche, so
+        dass eine dort angekreuzte Zeile zuverlaessig die gemeinte Zeile
+        trifft. Summen-, Uebertrags- und Leerzeilen bleiben unberuehrt; sie
+        werden nicht angezeigt und duerfen sich beim Loeschen nicht
+        verschieben. Rueckgabe: Anzahl der tatsaechlich entfernten Zeilen.
+        """
+        gemeint = {int(p) for p in positions}
+        stellen = [i for i, row in enumerate(self.rows) if row.kind is RowKind.DATEN]
+        entfernen = {stellen[p] for p in gemeint if 0 <= p < len(stellen)}
+        if not entfernen:
+            return 0
+        self.rows = [row for i, row in enumerate(self.rows) if i not in entfernen]
+        return len(entfernen)
 
     def schwerpunkte(self) -> list[dict[str, Any]]:
         """Datenpunkte und Funktionen je Automations-/Informationsschwerpunkt.

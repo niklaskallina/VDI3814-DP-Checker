@@ -122,13 +122,16 @@ def _merge_tables(tables: list[RawTable], profile: Profile | None) -> tuple[
     return columns, rows, ordered, metadata
 
 
-def _validate_sums(result: DocumentResult) -> list[SumCheck]:
+def validate_sums(result: DocumentResult) -> list[SumCheck]:
     """Prueft je Seite: Summenzeile der Seite gegen die Datenzeilen derselben Seite.
 
     Nur so ist der Vergleich aussagekraeftig. Reine Summenblaetter (Seiten, auf
     denen ausschliesslich Summen je Anlage stehen) werden nicht geprueft - sie
     fassen einen anderen Umfang zusammen und wuerden sonst auf jeder Spalte
     eine scheinbare Abweichung erzeugen.
+
+    Oeffentlich, weil die Oberflaeche die Pruefung nach einer Korrektur (z. B.
+    dem Loeschen einer Zeile) neu rechnen muss.
     """
     seiten: dict[int, dict[str, dict[int, float]]] = {}
     for row in result.rows:
@@ -397,7 +400,7 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
     result.metadata = metadata
     assign_footnotes(result.columns, result.footnotes)
     _ordne_schwerpunkte(result, tables)
-    result.sum_checks = _validate_sums(result)
+    result.sum_checks = validate_sums(result)
 
     unmatched = [c for c in result.columns if not c.column_key]
     if profile is not None and unmatched:

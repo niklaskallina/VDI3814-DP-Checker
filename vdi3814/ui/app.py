@@ -23,12 +23,12 @@ from sqlalchemy.orm import Session                                     # noqa: E
 from vdi3814 import aggregate, db, evidence, export_excel, projects, schwerpunkt  # noqa: E402
 from vdi3814.config import SETTINGS                                     # noqa: E402
 from vdi3814.costs import apply_prices, price_template, total_cost      # noqa: E402
-from vdi3814.models import Cell, DocumentResult, RowKind                         # noqa: E402
-from vdi3814.pipeline import process_file                               # noqa: E402
+from vdi3814.pipeline import process_file, validate_sums                # noqa: E402
 from vdi3814.profiles_loader import get_profile, load_profiles                       # noqa: E402
+from vdi3814.ui.table import (DELETE_FIELD, frame_to_result, marked_rows,  # noqa: E402
+                              result_to_frame)
 from vdi3814.vision import ocr                                          # noqa: E402
 
-ROW_FIELDS = ["Zeile", "Schwerpunkt", "Datenpunkt", "Benutzeradresse", "Typ", "Bemerkung"]
 ART_SYMBOL = {"abweichung": "🔴", "ausgeschlossen": "🟠", "hinweis": "🔵"}
 
 st.set_page_config(page_title="VDI 3814 DP-Checker", page_icon="📋", layout="wide")
@@ -119,77 +119,6 @@ def _pruefungstext(ergebnis) -> str:
             f"(S. {', '.join(str(i + 1) for i in sorted(abweichend)[:5])})")
 
 
-def result_to_frame(result: DocumentResult) -> pd.DataFrame:
-    columns = [c for c in result.columns if not c.is_note_column]
-    records = []
-    for row in result.rows:
-        # Nur echte Datenpunkte zeigen. Summen-, Uebertrags-, Leer- und
-        # Fussbereichszeilen stehen nachvollziehbar unter "Nicht gezaehlte
-        # Zeilen" und haben in der Korrekturtabelle nichts verloren.
-        if row.kind is not RowKind.DATEN:
-            continue
-        record = {
-            "Zeile": row.row_no,
-            "Schwerpunkt": row.schwerpunkt_anzeige(),
-            "Datenpunkt": row.klartext,
-            "Benutzeradresse": row.bas,
-            "Typ": row.qualifier,
-            "Bemerkung": row.remark,
-        }
-        for column in columns:
-            record[_column_title(column)] = row.value(column.index)
-        records.append(record)
-    return pd.DataFrame(records, columns=ROW_FIELDS + [_column_title(c) for c in columns])
-
-
-def _column_title(column) -> str:
-    prefix = column.address or str(column.index)
-    return f"{prefix} · {column.label or column.column_key or ''}"[:60]
-
-
-def _schwerpunkt_aus_text(text: str, row) -> tuple[str, str]:
-    """Eingabe "ASP01 Heizungstechnik" in Kennung und Bezeichnung zerlegen.
-
-    Steht kein ASP/ISP im Text, bleibt die erkannte Kennung stehen und der
-    Text gilt als Bezeichnung - so laesst sich beides einzeln nachtragen.
-    """
-    text = str(text or "").strip()
-    if not text:
-        return "", ""
-    gefunden = schwerpunkt.parse(text)
-    if gefunden is not None:
-        return gefunden.kennung, gefunden.bezeichnung
-    return row.schwerpunkt, text
-
-
-def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResult:
-    columns = [c for c in result.columns if not c.is_note_column]
-    title_to_index = {_column_title(c): c.index for c in columns}
-    data_rows = [row for row in result.rows if row.kind is RowKind.DATEN]
-    for position, record in enumerate(frame.to_dict("records")):
-        if position >= len(data_rows):
-            break
-        row = data_rows[position]
-        row.row_no = str(record.get("Zeile", "") or "")
-        row.schwerpunkt, row.schwerpunkt_text = _schwerpunkt_aus_text(
-            record.get("Schwerpunkt", ""), row)
-        row.klartext = str(record.get("Datenpunkt", "") or "")
-        row.bas = str(record.get("Benutzeradresse", "") or "")
-        row.qualifier = str(record.get("Typ", "") or "")
-        row.remark = str(record.get("Bemerkung", "") or "")
-        alt = {cell.column_index: cell for cell in row.cells}
-        neu: list[Cell] = []
-        for titel, column_index in title_to_index.items():
-            wert = record.get(titel)
-            if wert is None or (isinstance(wert, float) and pd.isna(wert)) or wert == "":
-                continue
-            vorher = alt.get(column_index)
-            neu.append(Cell(column_index=column_index, raw_value=str(wert), count=float(wert),
-                            bbox=vorher.bbox if vorher else None))
-        row.cells = neu
-    return result
-
-
 # --------------------------------------------------------------------------
 # 1 - Import
 # --------------------------------------------------------------------------
@@ -271,10 +200,6 @@ with tab_import:
 # 2 - Vorschau und Korrektur
 # --------------------------------------------------------------------------
 
-# --------------------------------------------------------------------------
-# 2 - Vorschau und Korrektur
-# --------------------------------------------------------------------------
-
 with tab_preview:
     st.subheader("Erkanntes Ergebnis prüfen und korrigieren")
     ergebnisse = state()["results"]
@@ -322,15 +247,46 @@ with tab_preview:
         st.caption("Zahlenwerte je Funktionsspalte – Korrekturen wirken sofort auf Summen, "
                    "Kosten und Export. Spaltentitel: Abschnitt.Spalte · Bezeichnung. "
                    "In der Spalte „Schwerpunkt“ lässt sich der ASP/ISP nachtragen "
-                   "oder korrigieren (z. B. „ASP01 Heizungstechnik 2.UG“).")
-        tabelle = st.data_editor(result_to_frame(ergebnis), width="stretch",
-                                 num_rows="fixed", key=f"editor_{name}", height=420)
+                   "oder korrigieren (z. B. „ASP01 Heizungstechnik 2.UG“). "
+                   "Ganze Zeilen entfernen: links ankreuzen – einzeln oder mehrere "
+                   "auf einmal – und darunter löschen.")
+        # Nach dem Loeschen erhaelt der Editor einen neuen Schluessel. Sonst
+        # blieben die Haken an ihren alten Zeilennummern haengen und wuerden
+        # beim naechsten Durchlauf die nachgerueckten Zeilen treffen.
+        fassung_editor = state().setdefault("editor_fassung", {}).get(name, 0)
+        tabelle = st.data_editor(
+            result_to_frame(ergebnis), width="stretch", num_rows="fixed",
+            key=f"editor_{name}_{fassung_editor}", height=420,
+            column_config={DELETE_FIELD: st.column_config.CheckboxColumn(
+                DELETE_FIELD, default=False,
+                help="Zeile ankreuzen und unterhalb der Tabelle löschen")},
+        )
         frame_to_result(tabelle, ergebnis)
 
-        if st.button("In Datenbank speichern", type="primary", key=f"save_{name}"):
-            with Session(engine) as session:
-                dokument = db.save_document(session, ergebnis)
-            st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument.id}).")
+        angekreuzt = marked_rows(tabelle)
+        knopf_loeschen, knopf_speichern = st.columns([1, 2])
+        with knopf_loeschen:
+            beschriftung = (f"{len(angekreuzt)} Zeile(n) löschen" if angekreuzt
+                            else "Ausgewählte Zeilen löschen")
+            if st.button(beschriftung, disabled=not angekreuzt, key=f"loeschen_{name}"):
+                entfernt = ergebnis.remove_data_rows(angekreuzt)
+                # Die Summenpruefung vergleicht Summenzeile gegen Datenzeilen -
+                # nach dem Entfernen muss sie neu gerechnet werden.
+                ergebnis.sum_checks = validate_sums(ergebnis)
+                ergebnis.warnings.append(
+                    f"{entfernt} Datenzeile(n) wurden beim Prüfen manuell gelöscht."
+                )
+                state()["editor_fassung"][name] = fassung_editor + 1
+                st.toast(f"{entfernt} Zeile(n) gelöscht – zum Übernehmen speichern.")
+                st.rerun()
+        with knopf_speichern:
+            if st.button("In Datenbank speichern", type="primary", key=f"save_{name}"):
+                with Session(engine) as session:
+                    dokument = db.save_document(session, ergebnis)
+                st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument.id}).")
+        st.caption("Gelöschte Zeilen wirken sich erst nach dem Speichern auf Übersicht, "
+                   "Kosten und Export aus. Ein erneuter Import der Datei stellt den "
+                   "ursprünglichen Stand wieder her.")
 
 
 # --------------------------------------------------------------------------
