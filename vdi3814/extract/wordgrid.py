@@ -322,6 +322,9 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
         "blatt nr": "blatt_nr",
         "von": "blatt_von",   # nur gueltig, wenn "Blatt Nr." schon gefunden wurde
         "informationsschwerpunkt": "informationsschwerpunkt",
+        "isp": "informationsschwerpunkt",
+        "automationsschwerpunkt": "automationsschwerpunkt",
+        "asp": "automationsschwerpunkt",
         "datenkommunikationsprotokoll": "protokoll",
         "ausgabedatum": "datum",
         "datum": "datum",
@@ -329,7 +332,7 @@ def _extract_metadata(words: list[Word], grid: _HeaderGrid, skip: set[int]) -> D
     # Woerter, die im Fussbereich als weitere Beschriftung dienen und deshalb
     # nie ein Wert sein koennen.
     stop_words = {"name", "geprueft", "inhalt", "index", "rev", "blatt", "datei",
-                  "asp", "seite", "stand"}
+                  "seite", "stand"}
     metadata = DocumentMetadata()
 
     def is_label_row(row: list[Word]) -> bool:

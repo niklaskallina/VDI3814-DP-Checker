@@ -113,6 +113,9 @@ class DataPointRow:
     cells: list[Cell] = field(default_factory=list)
     page_index: int = 0
     bbox: tuple[float, float, float, float] | None = None    # Fundstelle der Zeile
+    # Automations-/Informationsschwerpunkt, zu dem die Zeile gehoert
+    schwerpunkt: str = ""            # normierte Kennung, z. B. "ASP01"
+    schwerpunkt_text: str = ""       # Bezeichnung, z. B. "Heizungstechnik 2.UG"
     kind: RowKind = RowKind.DATEN
     exclusion_reason: str = ""
     confidence: float = 0.0
@@ -141,6 +144,10 @@ class DataPointRow:
     def label(self) -> str:
         return self.klartext or self.bas or f"Zeile {self.row_no}"
 
+    def schwerpunkt_anzeige(self) -> str:
+        """Kennung mit Bezeichnung, z. B. "ASP01 Heizungstechnik 2.UG"."""
+        return f"{self.schwerpunkt} {self.schwerpunkt_text}".strip()
+
 
 @dataclass
 class DocumentMetadata:
@@ -157,7 +164,8 @@ class DocumentMetadata:
     blatt_von: str = ""
     datum: str = ""
     vdi_blatt: str = ""
-    informationsschwerpunkt: str = ""
+    informationsschwerpunkt: str = ""      # ISP laut Kopf-/Fussbereich
+    automationsschwerpunkt: str = ""       # ASP laut Kopf-/Fussbereich
 
     def merge(self, other: "DocumentMetadata") -> None:
         """Uebernimmt fehlende Felder aus einem weiteren Fund (z. B. Folgeseite)."""
@@ -194,6 +202,7 @@ class PageResult:
     width: float = 0.0        # Seitenbreite in Quellkoordinaten (fuer den Nachweis)
     height: float = 0.0
     error: str = ""
+    schwerpunkt: str = ""       # ASP/ISP der Seite; mehrere durch Komma getrennt
     rows: list[DataPointRow] = field(default_factory=list)
 
     @property
@@ -234,6 +243,33 @@ class DocumentResult:
     def excluded_rows(self) -> list[DataPointRow]:
         """Nicht gezaehlte Zeilen inkl. Begruendung - fuer den Pruefbericht."""
         return [r for r in self.rows if r.kind is not RowKind.DATEN]
+
+    def schwerpunkte(self) -> list[dict[str, Any]]:
+        """Datenpunkte und Funktionen je Automations-/Informationsschwerpunkt.
+
+        Reihenfolge wie im Dokument, damit ASP01, ASP02, ASP03 auch in dieser
+        Folge erscheinen. Zeilen ohne erkannten Schwerpunkt stehen zuletzt.
+        """
+        from .schwerpunkt import OHNE_ZUORDNUNG
+
+        gefunden: dict[str, dict[str, Any]] = {}
+        for row in self.counted_rows():
+            kennung = row.schwerpunkt or OHNE_ZUORDNUNG
+            eintrag = gefunden.setdefault(kennung, {
+                "schwerpunkt": kennung,
+                "bezeichnung": row.schwerpunkt_text,
+                "datenpunkte": 0,
+                "funktionen": 0.0,
+            })
+            if not eintrag["bezeichnung"]:
+                eintrag["bezeichnung"] = row.schwerpunkt_text
+            eintrag["datenpunkte"] += 1
+            eintrag["funktionen"] += sum(c.count or 0.0 for c in row.cells)
+        ohne = gefunden.pop(OHNE_ZUORDNUNG, None)
+        eintraege = list(gefunden.values())
+        if ohne is not None:
+            eintraege.append(ohne)
+        return eintraege
 
     def column_by_index(self, index: int) -> ColumnHeader | None:
         for col in self.columns:

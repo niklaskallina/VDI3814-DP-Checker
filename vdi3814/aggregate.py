@@ -6,12 +6,13 @@ import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import db
+from . import db, schwerpunkt
 from .profiles_loader import get_profile, load_profiles
 
 RAW_COLUMNS = [
     "dokument_id", "datei", "fassung", "profil", "projekt", "auftraggeber", "anlage",
-    "gewerk", "planersteller", "blatt", "seite", "zeile_nr", "datenpunkt", "bas",
+    "schwerpunkt", "schwerpunkt_bezeichnung", "gewerk", "planersteller", "blatt",
+    "seite", "zeile_id", "zeile_nr", "datenpunkt", "bas",
     "qualifikation", "bemerkung", "spalte_adresse", "spalte_key", "gruppe",
     "untergruppe", "spalte", "wert", "rohwert", "notiz", "importiert_am",
 ]
@@ -60,10 +61,13 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
                     "projekt": document.projekt or document.auftraggeber,
                     "auftraggeber": document.auftraggeber,
                     "anlage": document.anlage,
+                    "schwerpunkt": row.schwerpunkt or schwerpunkt.OHNE_ZUORDNUNG,
+                    "schwerpunkt_bezeichnung": row.schwerpunkt_text or "",
                     "gewerk": document.gewerk,
                     "planersteller": document.planersteller,
                     "blatt": document.blatt_nr,
                     "seite": row.page_index + 1,
+                    "zeile_id": row.id,
                     "zeile_nr": row.row_no,
                     "datenpunkt": row.klartext,
                     "bas": row.bas,
@@ -123,16 +127,53 @@ def group_summary(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def by_dimension(frame: pd.DataFrame, dimension: str) -> pd.DataFrame:
-    """Summen je Projekt / Anlage / Gewerk / Datei."""
+    """Summen je Projekt / Anlage / Schwerpunkt / Gewerk / Datei.
+
+    "datenpunkte" zaehlt echte Datenpunktzeilen, nicht belegte Zellen -
+    deshalb ueber die Zeilen-ID und nicht ueber die Benennung (die kann sich
+    in zwei Listen wiederholen).
+    """
     if frame.empty or dimension not in frame.columns:
         return pd.DataFrame(columns=[dimension, "menge", "datenpunkte", "dokumente"])
     return (
         frame.groupby(dimension, dropna=False)
         .agg(menge=("wert", "sum"),
-             datenpunkte=("datenpunkt", "count"),
+             datenpunkte=("zeile_id", "nunique"),
              dokumente=("dokument_id", "nunique"))
         .reset_index().sort_values("menge", ascending=False).reset_index(drop=True)
     )
+
+
+def schwerpunkt_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """Datenpunkte und Funktionen je Automations-/Informationsschwerpunkt.
+
+    Beantwortet die Frage "wie viel steckt in ASP01, wie viel in ASP02?" -
+    quer ueber alle importierten Listen. Traegt eine Liste denselben ASP mit
+    unterschiedlicher Bezeichnung, bleiben die Angaben getrennt: dann ist im
+    Plansatz etwas uneinheitlich und das soll sichtbar bleiben.
+    """
+    spalten = ["schwerpunkt", "bezeichnung", "art", "datenpunkte", "menge",
+               "dokumente", "dateien"]
+    if frame.empty:
+        return pd.DataFrame(columns=spalten)
+    grouped = (
+        frame.groupby(["schwerpunkt", "schwerpunkt_bezeichnung"], dropna=False)
+        .agg(datenpunkte=("zeile_id", "nunique"),
+             menge=("wert", "sum"),
+             dokumente=("dokument_id", "nunique"),
+             dateien=("datei", lambda werte: ", ".join(sorted(set(werte)))))
+        .reset_index().rename(columns={"schwerpunkt_bezeichnung": "bezeichnung"})
+    )
+    grouped["art"] = [
+        "ASP" if str(kennung).upper().startswith("ASP")
+        else "ISP" if str(kennung).upper().startswith("ISP") else ""
+        for kennung in grouped["schwerpunkt"]
+    ]
+    # Zeilen ohne Zuordnung ans Ende, sonst nach Kennung sortieren
+    grouped["_sort"] = [1 if k == schwerpunkt.OHNE_ZUORDNUNG else 0
+                        for k in grouped["schwerpunkt"]]
+    grouped = grouped.sort_values(["_sort", "schwerpunkt"]).drop(columns="_sort")
+    return grouped[spalten].reset_index(drop=True)
 
 
 def pivot_projects(frame: pd.DataFrame) -> pd.DataFrame:
@@ -142,6 +183,17 @@ def pivot_projects(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.pivot_table(frame, index=["projekt", "anlage"], columns="gruppe",
                           values="wert", aggfunc="sum", fill_value=0, margins=True,
                           margins_name="Gesamt").reset_index()
+
+
+def _schwerpunkte_der_datei(document: db.Document) -> list[str]:
+    """Alle Schwerpunkte einer Datei in der Reihenfolge des Dokuments."""
+    gefunden: list[str] = []
+    for row in document.rows:
+        if row.kind != "daten" or not row.schwerpunkt:
+            continue
+        if row.schwerpunkt not in gefunden:
+            gefunden.append(row.schwerpunkt)
+    return gefunden
 
 
 def documents_frame(session: Session) -> pd.DataFrame:
@@ -171,6 +223,7 @@ def documents_frame(session: Session) -> pd.DataFrame:
             "seiten_uebersprungen": "; ".join(
                 f"S.{p.page_index + 1} ({p.kind})" for p in sorted(skipped, key=lambda p: p.page_index)
             ),
+            "schwerpunkte": ", ".join(_schwerpunkte_der_datei(document)),
             "datenpunkte": len([r for r in document.rows if r.is_countable]),
             "summe_funktionen": sum(v.count or 0.0 for r in document.rows
                                     if r.kind == "daten" for v in r.values),
@@ -211,7 +264,8 @@ def vdi_layout_frame(session: Session, profile_id: str) -> pd.DataFrame:
         return pd.DataFrame()
 
     column_titles = [column.label for column in profile.columns]
-    kopf = ["Datei", "Blatt", "Zeile Nr.", "Datenpunkt", "Benutzeradresse", "Typ"]
+    kopf = ["Schwerpunkt", "Bezeichnung", "Datei", "Blatt", "Zeile Nr.",
+            "Datenpunkt", "Benutzeradresse", "Typ"]
     records: list[dict] = []
 
     for document in session.scalars(select(db.Document).order_by(db.Document.file_name)):
@@ -222,6 +276,8 @@ def vdi_layout_frame(session: Session, profile_id: str) -> pd.DataFrame:
             if row.kind != "daten" or not row.is_countable:
                 continue
             record = {
+                "Schwerpunkt": row.schwerpunkt or "",
+                "Bezeichnung": row.schwerpunkt_text or "",
                 "Datei": document.file_name,
                 "Blatt": document.blatt_nr or "",
                 "Zeile Nr.": row.row_no,
@@ -285,6 +341,7 @@ def pruefbericht(session: Session) -> pd.DataFrame:
             listen = gemeldet.get(column_idx)
             records.append({
                 "datei": document.file_name,
+                "schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
                 "art": "Summenabgleich",
                 "spalte": column.address if column else str(column_idx),
                 "bezeichnung": column.label if column else "",
@@ -304,6 +361,7 @@ def pruefbericht(session: Session) -> pd.DataFrame:
             summe = sum(v.count or 0.0 for v in row.values)
             records.append({
                 "datei": document.file_name,
+                "schwerpunkt": row.schwerpunkt or "",
                 "art": "nicht gezählte Zeile",
                 "spalte": "",
                 "bezeichnung": row.klartext,
@@ -315,9 +373,72 @@ def pruefbericht(session: Session) -> pd.DataFrame:
                 "begruendung": row.exclusion_reason,
             })
     return pd.DataFrame(records, columns=[
-        "datei", "art", "spalte", "bezeichnung", "seite", "zeile",
+        "datei", "schwerpunkt", "art", "spalte", "bezeichnung", "seite", "zeile",
         "wert_liste", "wert_eigene_zaehlung", "bewertung", "begruendung",
     ])
+
+
+def schwerpunkt_matrix(session: Session, profile_id: str) -> pd.DataFrame:
+    """Mengen je Automations-/Informationsschwerpunkt und Funktionsspalte.
+
+    Aufbau wie datei_spalten_matrix(), nur ist die Zeile hier kein Dokument,
+    sondern ein Schwerpunkt. Gruppiert wird je Datei und Schwerpunkt: die
+    laufende Nummer eines ASP gilt nur innerhalb eines Plansatzes, ein
+    dateiuebergreifendes Zusammenfassen von "ASP01" wuerde zwei verschiedene
+    Schwerpunkte vermischen. Die Gesamtsicht ueber alle Listen liefert
+    schwerpunkt_summary().
+    """
+    profile = get_profile(profile_id)
+    if profile is None:
+        return pd.DataFrame()
+
+    kopf = ["Schwerpunkt", "Bezeichnung", "Datei", "Projekt", "Anlage", "Datenpunkte"]
+    records: list[dict] = []
+    for document in session.scalars(
+        select(db.Document).order_by(db.Document.file_name)
+    ):
+        if document.profile_id != profile_id:
+            continue
+        columns = {c.idx: c for c in document.columns}
+        je_schwerpunkt: dict[str, dict] = {}
+        for row in document.rows:
+            if row.kind != "daten" or not row.is_countable:
+                continue
+            kennung = row.schwerpunkt or schwerpunkt.OHNE_ZUORDNUNG
+            record = je_schwerpunkt.get(kennung)
+            if record is None:
+                record = {
+                    "Schwerpunkt": kennung,
+                    "Bezeichnung": row.schwerpunkt_text or "",
+                    "Datei": document.file_name,
+                    "Projekt": document.projekt or document.auftraggeber,
+                    "Anlage": document.anlage,
+                    "Datenpunkte": 0,
+                }
+                for column in profile.columns:
+                    record[column.key] = 0.0
+                je_schwerpunkt[kennung] = record
+            if not record["Bezeichnung"] and row.schwerpunkt_text:
+                record["Bezeichnung"] = row.schwerpunkt_text
+            record["Datenpunkte"] += 1
+            for value in row.values:
+                if value.count is None:
+                    continue
+                column = columns.get(value.column_idx)
+                if column is None or not column.column_key:
+                    continue
+                if column.column_key in record:
+                    record[column.column_key] += value.count
+        records.extend(je_schwerpunkt.values())
+
+    frame = pd.DataFrame(records, columns=kopf + [c.key for c in profile.columns])
+    if frame.empty:
+        return frame
+    # Nach Kennung sortieren, Zeilen ohne Zuordnung ans Ende
+    frame["_sort"] = [1 if k == schwerpunkt.OHNE_ZUORDNUNG else 0
+                      for k in frame["Schwerpunkt"]]
+    frame = frame.sort_values(["_sort", "Schwerpunkt", "Datei"]).drop(columns="_sort")
+    return frame.reset_index(drop=True)
 
 
 def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
@@ -331,7 +452,7 @@ def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
     if profile is None:
         return pd.DataFrame()
 
-    kopf = ["Datei", "Projekt", "Anlage", "Gewerk", "Blatt", "Datenpunkte"]
+    kopf = ["Datei", "Projekt", "Anlage", "Schwerpunkt", "Gewerk", "Blatt", "Datenpunkte"]
     records: list[dict] = []
     for document in session.scalars(
         select(db.Document).order_by(db.Document.file_name)
@@ -343,6 +464,9 @@ def datei_spalten_matrix(session: Session, profile_id: str) -> pd.DataFrame:
             "Datei": document.file_name,
             "Projekt": document.projekt or document.auftraggeber,
             "Anlage": document.anlage,
+            # Enthaelt die Datei mehrere Schwerpunkte, stehen sie hier alle;
+            # aufgeschluesselt sind sie in schwerpunkt_matrix().
+            "Schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
             "Gewerk": document.gewerk,
             "Blatt": document.blatt_nr,
             "Datenpunkte": 0,

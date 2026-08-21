@@ -5,6 +5,10 @@ VDI-Vorlagen - inkl. Kopfzeilen "Abschnitt"/"Spalte", Fussnoten, Datenzeilen,
 Summenzeile und Fussbereich - sowie ein Regelschema als zusaetzliche Seite,
 damit sich das Ueberspringen von Schemaseiten demonstrieren laesst.
 
+Dazu kommt ein Uebersichtsblatt, auf dem je Zeile ein Automationsschwerpunkt
+steht (ASP01, ASP02, ASP03) - so, wie es die Plansaetze am Ende eines
+Plansatzes fuehren.
+
 Aufruf:  python sample_data/make_samples.py
 """
 
@@ -134,6 +138,9 @@ def _draw_list(page, profile, rows, meta, footnotes, title):
     _text(page, LEFT + 90, y + 10, f" von {meta['blatt_von']}", size=6.0)
     if meta.get("protokoll"):
         _text(page, LEFT + 260, y + 10, f" Datenkommunikationsprotokoll: {meta['protokoll']}", size=6.0)
+    if meta.get("asp"):
+        # Automationsschwerpunkt - in den Vorlagen als eigenes Feld im Fussbereich
+        _text(page, LEFT + 480, y + 10, f" ASP: {meta['asp']}", size=6.0)
 
 
 def _draw_schema(page):
@@ -174,6 +181,7 @@ def build_alt(path: Path) -> None:
         "blatt_nr": "1",
         "blatt_von": "1",
         "protokoll": "",
+        "asp": "01",
     }
     document = pymupdf.open()
     page = document.new_page(width=842, height=595)
@@ -202,7 +210,7 @@ def build_neu(path: Path) -> None:
     ]
     meta = {
         "gewerk": "GA",
-        "anlage": "Basis BACnet-AE / Beispiel 1",
+        "anlage": "ASP02 Basis BACnet-AE / Beispiel 1",
         "projekt": "Muster-Campus, Bauteil B",
         "planersteller": "Musterplanung GmbH",
         "planstand": "2024-06-01",
@@ -217,9 +225,45 @@ def build_neu(path: Path) -> None:
     document.close()
 
 
+def build_asp_uebersicht(path: Path) -> None:
+    """Uebersichtsblatt mit einer Zeile je Automationsschwerpunkt.
+
+    So enden viele Plansaetze: statt einzelner Datenpunkte steht je Zeile ein
+    ASP mit seiner Bezeichnung und den Summen seiner Funktionen.
+    """
+    profile = get_profile("vdi3814_alt")
+    rows = [
+        ("ASP01 Heizungstechnik 2.UG",
+         {"1.1": "15", "1.2": "10", "1.3": "66", "1.5": "50", "3.1": "65", "8.1": "999"}, ""),
+        ("ASP02 Kaeltetechnik 2.UG",
+         {"1.1": "22", "1.2": "17", "1.3": "88", "1.5": "89", "3.1": "42", "8.1": "582"}, ""),
+        ("ASP03 Lueftungstechnik 2.UG",
+         {"1.1": "10", "1.2": "7", "1.3": "55", "1.5": "18", "3.1": "19", "8.1": "423"}, ""),
+    ]
+    meta = {
+        "gewerk": "MSR / Gebaeudeautomation",
+        "anlage": "Zusammenstellung Automationsschwerpunkte",
+        "projekt": "Neubau Verwaltungsgebaeude Musterstadt",
+        "planersteller": "Musterplanung GmbH",
+        "planstand": "2024-05-14",
+        "blatt_nr": "9",
+        "blatt_von": "9",
+        "protokoll": "",
+        "asp": "",
+    }
+    document = pymupdf.open()
+    page = document.new_page(width=842, height=595)
+    _draw_list(page, profile, rows, meta,
+               [(marker, text) for marker, text in profile.footnotes[:4]],
+               "GA-Funktionsliste VDI 3814 Blatt 1 - Zusammenstellung je ASP")
+    document.save(path)
+    document.close()
+
+
 def main() -> None:
     build_alt(OUT_DIR / "beispiel_alte_fassung.pdf")
     build_neu(OUT_DIR / "beispiel_neue_fassung.pdf")
+    build_asp_uebersicht(OUT_DIR / "beispiel_asp_uebersicht.pdf")
     print(f"Beispieldateien geschrieben nach {OUT_DIR}")
 
 

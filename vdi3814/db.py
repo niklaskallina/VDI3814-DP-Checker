@@ -92,6 +92,7 @@ class Document(Base):
     datum: Mapped[str] = mapped_column(String(64), default="")
     vdi_blatt: Mapped[str] = mapped_column(String(64), default="")
     informationsschwerpunkt: Mapped[str] = mapped_column(Text, default="")
+    automationsschwerpunkt: Mapped[str] = mapped_column(Text, default="")
 
     columns: Mapped[list["Column"]] = relationship(back_populates="document", cascade="all, delete-orphan")
     rows: Mapped[list["Row"]] = relationship(back_populates="document", cascade="all, delete-orphan")
@@ -117,6 +118,7 @@ class Page(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     width: Mapped[float] = mapped_column(Float, default=0.0)
     height: Mapped[float] = mapped_column(Float, default=0.0)
+    schwerpunkt: Mapped[str] = mapped_column(Text, default="")   # ASP/ISP der Seite
 
     document: Mapped[Document] = relationship(back_populates="pages")
 
@@ -152,6 +154,10 @@ class Row(Base):
     qualifier: Mapped[str] = mapped_column(Text, default="")
     remark: Mapped[str] = mapped_column(Text, default="")
     kind: Mapped[str] = mapped_column(String(16), default="daten", index=True)
+    # Automations-/Informationsschwerpunkt der Zeile - Grundlage der
+    # Auswertung "wie viele Datenpunkte entfallen auf welchen ASP/ISP"
+    schwerpunkt: Mapped[str] = mapped_column(String(16), default="", index=True)
+    schwerpunkt_text: Mapped[str] = mapped_column(Text, default="")
     exclusion_reason: Mapped[str] = mapped_column(Text, default="")
     bbox: Mapped[str] = mapped_column(String(64), default="")   # Fundstelle "x0,y0,x1,y1"
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
@@ -354,6 +360,8 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             klartext=row.klartext,
             qualifier=row.qualifier,
             remark=row.remark,
+            schwerpunkt=row.schwerpunkt,
+            schwerpunkt_text=row.schwerpunkt_text,
             kind=row.kind.value,
             exclusion_reason=row.exclusion_reason,
             bbox=_bbox_to_text(row.bbox),
@@ -381,6 +389,7 @@ def save_document(session: Session, result: DocumentResult, replace: bool = True
             reason=page.classification.reason,
             width=page.width,
             height=page.height,
+            schwerpunkt=page.schwerpunkt,
         ))
 
     for footnote in result.footnotes:
@@ -479,6 +488,8 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
             qualifier=row.qualifier,
             remark=row.remark,
             page_index=row.page_index,
+            schwerpunkt=row.schwerpunkt or "",
+            schwerpunkt_text=row.schwerpunkt_text or "",
             kind=RowKind(row.kind) if row.kind else RowKind.DATEN,
             exclusion_reason=row.exclusion_reason,
             confidence=row.confidence,
@@ -493,7 +504,8 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
         PageResult(page_index=page.page_index,
                    classification=PageClassification(PageKind(page.kind) if page.kind else PageKind.SONSTIGES,
                                                      page.confidence, page.reason),
-                   width=page.width, height=page.height)
+                   width=page.width, height=page.height,
+                   schwerpunkt=page.schwerpunkt or "")
         for page in document.pages
     ]
     result.footnotes = [

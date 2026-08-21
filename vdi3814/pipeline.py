@@ -39,6 +39,7 @@ from .models import (
     SumCheck,
 )
 from .profiles_loader import Profile, assign_footnotes, detect_profile, enrich_columns, match_columns
+from . import schwerpunkt as schwerpunkte
 from .vision import ocr
 
 log = logging.getLogger(__name__)
@@ -395,6 +396,7 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
     result.footnotes = footnotes
     result.metadata = metadata
     assign_footnotes(result.columns, result.footnotes)
+    _ordne_schwerpunkte(result, tables)
     result.sum_checks = _validate_sums(result)
 
     unmatched = [c for c in result.columns if not c.column_key]
@@ -431,6 +433,38 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
             "Einzelheiten im Reiter 'Nachweis & Differenzen'."
         )
     return result
+
+
+def _ordne_schwerpunkte(result: DocumentResult, tables: list[RawTable]) -> None:
+    """Ordnet jede Zeile ihrem Automations-/Informationsschwerpunkt zu.
+
+    Ein Plansatz enthaelt haeufig mehrere Schwerpunkte (ASP01, ASP02, ...) -
+    je Seite einen oder, auf Uebersichtsblaettern, mehrere untereinander.
+    Massgeblich ist deshalb zuerst der Kopf-/Fussbereich der jeweiligen Seite,
+    dann die Angabe in der Zeile selbst (siehe schwerpunkt.zuordnen).
+    """
+    vorgaben = {}
+    for table in tables:
+        gefunden = schwerpunkte.aus_metadaten(table.metadata)
+        if gefunden is not None:
+            vorgaben[table.page_index] = gefunden
+    schwerpunkte.zuordnen(result.rows, vorgaben,
+                          schwerpunkte.aus_metadaten(result.metadata))
+
+    je_seite = schwerpunkte.je_seite(result.rows)
+    for page in result.pages:
+        vorgabe = vorgaben.get(page.page_index)
+        page.schwerpunkt = je_seite.get(page.page_index) or (vorgabe.kennung if vorgabe else "")
+
+    # Mehrere Schwerpunkte je Datei sind der Normalfall und deshalb kein
+    # Hinweis wert - gar keiner dagegen schon: dann fehlt der Auswertung die
+    # Zuordnung, und der Anwender muss sie nachtragen koennen.
+    if not any(row.schwerpunkt for row in result.counted_rows()):
+        result.warnings.append(
+            "Kein Automations-/Informationsschwerpunkt (ASP/ISP) gefunden. "
+            "Die Mengen lassen sich damit keinem Schwerpunkt zuordnen - "
+            "Angabe bei Bedarf im Reiter 'Prüfen & korrigieren' nachtragen."
+        )
 
 
 def _ocr_hint(path: Path, settings) -> str:

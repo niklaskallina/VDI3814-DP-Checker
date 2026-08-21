@@ -62,9 +62,11 @@ Antworte NUR mit JSON:
 METADATA = """Das Bild zeigt den Kopf- bzw. Fussbereich einer GA-Funktionsliste.
 
 Lies die Projektangaben aus. Nicht vorhandene Angaben als leeren String liefern.
+Achte besonders auf den Automations- bzw. Informationsschwerpunkt: er steht oft
+als "ASP 01" / "ISP 02" im Kopf- oder Fussbereich oder in der Anlagenangabe.
 
 Antworte NUR mit JSON:
 {"projekt": "", "auftraggeber": "", "anlage": "", "gewerk": "", "planersteller": "",
  "protokoll": "", "planstand": "", "blatt_nr": "", "blatt_von": "", "datum": "",
- "vdi_blatt": "", "informationsschwerpunkt": ""}
+ "vdi_blatt": "", "informationsschwerpunkt": "", "automationsschwerpunkt": ""}
 """
