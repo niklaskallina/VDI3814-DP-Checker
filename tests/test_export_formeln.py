@@ -5,6 +5,8 @@ Einheitspreise eingetragen. Diese Tests pruefen deshalb nicht nur, dass
 Formeln dastehen, sondern rechnen sie nach und vergleichen mit der Datenbank.
 """
 
+import copy
+
 import openpyxl
 import pytest
 from openpyxl.utils import get_column_letter
@@ -207,6 +209,79 @@ def test_geloeschte_zeile_wirkt_bis_in_die_kosten(export, tmp_path):
 
     nachher = float(_rechne(gekuerzt)[(name.upper(), gesamt_zelle)])
     assert nachher == pytest.approx(vorher - entfallen)
+
+
+@pytest.fixture(scope="module")
+def zwei_listen(tmp_path_factory, samples):
+    """Zwei Listen derselben Fassung - und zwar mit demselben Dateinamen.
+
+    Genau hier muss sich zeigen, ob die Uebersicht die richtigen Zeilen der
+    GA-Funktionsliste erwischt: ueber den Dateinamen waeren beide nicht zu
+    unterscheiden, und ein Bezug auf feste Zeilenbereiche wuerde bei der
+    zweiten Liste danebengreifen.
+    """
+    verzeichnis = tmp_path_factory.mktemp("zwei")
+    engine = db.make_engine(verzeichnis / "test.sqlite3")
+    with Session(engine) as session:
+        erste = process_file(samples["alt"])
+        db.save_document(session, erste)
+        # Gleicher Dateiname, anderer Inhalt: nur jede zweite Zeile.
+        zweite = copy.deepcopy(erste)
+        zweite.file_hash = "zweite" + erste.file_hash[6:]
+        zweite.rows = [zeile for nr, zeile in enumerate(zweite.rows) if nr % 2 == 0]
+        db.save_document(session, zweite)
+
+        roh = aggregate.raw_dataframe(session)
+        matrizen = {p: aggregate.datei_spalten_matrix(session, p)
+                    for p in aggregate.profiles_in_use(session)}
+        ziel = export_excel.export_workbook(
+            verzeichnis / "Auswertung.xlsx",
+            summary=aggregate.column_summary(roh),
+            raw=roh,
+            documents=aggregate.documents_frame(session),
+            footnotes=aggregate.footnotes_frame(session),
+            prices=PREISE,
+            layouts={p: aggregate.vdi_layout_frame(session, p)
+                     for p in aggregate.profiles_in_use(session)},
+            matrizen=matrizen,
+        )
+    return ziel, matrizen
+
+
+def test_jede_zeile_zieht_nur_die_zeilen_ihrer_eigenen_liste(zwei_listen):
+    """Zelle fuer Zelle gegen die Datenbank - je Datei und je Funktionsspalte."""
+    ziel, matrizen = zwei_listen
+    werte = _rechne(ziel)
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+
+    geprueft = 0
+    for profil, matrix in matrizen.items():
+        profile = get_profile(profil)
+        datensaetze = matrix.to_dict("records")
+        assert len(datensaetze) == 2, "der Fall lebt von zwei Listen"
+        assert datensaetze[0]["Datei"] == datensaetze[1]["Datei"], \
+            "gleicher Dateiname - unterschieden wird ueber den Schluessel"
+        assert datensaetze[0]["Schlüssel"] != datensaetze[1]["Schlüssel"]
+        unterschiedlich = [c.key for c in profile.columns
+                           if datensaetze[0].get(c.key) != datensaetze[1].get(c.key)]
+        assert unterschiedlich, \
+            "die Listen muessen sich unterscheiden, sonst prueft der Test nichts"
+
+        for versatz, record in enumerate(datensaetze):
+            zeile = 6 + versatz
+            assert blatt.cell(zeile, 1).value == record["Datei"]
+            datenpunkte = werte[(name.upper(), f"F{zeile}")]
+            assert float(datenpunkte) == float(record["Datenpunkte"]), \
+                f"Datenpunkte in Zeile {zeile}"
+            for index, column in enumerate(profile.columns):
+                zelle = f"{get_column_letter(7 + index)}{zeile}"
+                erwartet = float(record.get(column.key, 0.0) or 0.0)
+                assert float(werte[(name.upper(), zelle)]) == pytest.approx(erwartet), \
+                    f"Spalte {column.address} in Zeile {zeile}"
+                geprueft += 1
+    assert geprueft >= 50, "es muessen alle Funktionsspalten beider Zeilen geprueft sein"
 
 
 def _rechne(pfad) -> dict:
