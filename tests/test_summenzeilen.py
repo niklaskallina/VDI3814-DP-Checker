@@ -125,3 +125,43 @@ def test_summenblatt_wird_nicht_gezaehlt(tmp_path):
 
     kind, grund = classify_row("Summe 253002101O2432002_ RLT02", has_values=True)
     assert kind is RowKind.SUMME and grund
+
+
+def _als_scan(quelle, ziel, dpi=300):
+    """Erzeugt eine reine Bilddatei ohne Textebene - wie ein echter Scan."""
+    with pymupdf.open(quelle) as src, pymupdf.open() as out:
+        for index in range(src.page_count):
+            seite = src[index]
+            pixmap = seite.get_pixmap(matrix=pymupdf.Matrix(dpi / 72, dpi / 72), alpha=False)
+            neu = out.new_page(width=seite.rect.width, height=seite.rect.height)
+            neu.insert_image(neu.rect, pixmap=pixmap)
+        out.save(ziel)
+    return ziel
+
+
+def test_scan_liefert_dieselben_mengen_wie_die_textebene(samples, tmp_path):
+    """Kern der Scan-Auswertung: gleiche Datei als Bild muss gleich zaehlen."""
+    original = process_file(samples["alt"])
+    scan = process_file(_als_scan(samples["alt"], tmp_path / "scan.pdf"))
+
+    assert scan.backend == "ocr", "die Datei muss ueber die Texterkennung laufen"
+    assert scan.grand_total() == original.grand_total()
+    assert len(scan.counted_rows()) == len(original.counted_rows())
+
+
+def test_unbeschriftete_schlusszeile_wird_nie_mitgezaehlt():
+    """Auch wenn die Werte nicht aufgehen: die Schlusszeile zaehlt nicht mit.
+
+    Bei Scans kann die Summenzeile unsauber gelesen werden. Sie darf die Menge
+    dann nicht still verdoppeln - stattdessen meldet die Summenpruefung eine
+    Abweichung.
+    """
+    rows = [
+        _zeile("Ventil", {0: 2, 1: 2}),
+        _zeile("Pumpe", {0: 3, 1: 3}),
+        _zeile("", {0: 5, 1: 4}),          # sollte 5/5 sein - eine Ziffer verlesen
+    ]
+    markiere_unbeschriftete_summenzeilen(rows)
+    assert rows[2].kind is RowKind.SUMME
+    assert "gehen jedoch nicht auf" in rows[2].exclusion_reason
+    assert sum(c.count for r in rows if r.is_countable for c in r.cells) == 10

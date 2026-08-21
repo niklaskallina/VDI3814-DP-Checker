@@ -125,19 +125,27 @@ def markiere_unbeschriftete_summenzeilen(rows: list) -> list:
         werte = {c.column_index: c.count for c in row.cells if c.count is not None}
         ohne_beschriftung = not normalize(row.klartext) and not normalize(row.bas)
         am_ende = index == letzte_mit_werten
-        if (ohne_beschriftung and gezaehlte_zeilen >= 1
-                and (am_ende or gezaehlte_zeilen >= 2)
-                and _entspricht_summe(werte, laufend)):
-            row.kind = RowKind.SUMME
-            row.exclusion_reason = (
-                "Summenzeile ohne Beschriftung erkannt: die Werte entsprechen "
-                "spaltenweise der Summe der Zeilen darueber"
-            )
-            laufend = {}
-            gezaehlte_zeilen = 0
-            continue
-        for index, wert in werte.items():
-            laufend[index] = laufend.get(index, 0.0) + wert
+        if ohne_beschriftung and gezaehlte_zeilen >= 1:
+            passt = _entspricht_summe(werte, laufend)
+            # Die letzte Wertezeile einer Seite ohne Beschriftung ist die
+            # Summenzeile - auch dann, wenn die Werte nicht exakt aufgehen.
+            # Sie wird nie gezaehlt; eine Abweichung meldet stattdessen die
+            # Summenpruefung. Das verhindert, dass eine unsauber gelesene
+            # Summenzeile die Menge still verdoppelt.
+            if passt or (am_ende and gezaehlte_zeilen >= 2):
+                row.kind = RowKind.SUMME
+                row.exclusion_reason = (
+                    "Summenzeile ohne Beschriftung erkannt: die Werte entsprechen "
+                    "spaltenweise der Summe der Zeilen darueber"
+                    if passt else
+                    "Unbeschriftete Schlusszeile - als Summenzeile gewertet, "
+                    "die Werte gehen jedoch nicht auf (siehe Summenpruefung)"
+                )
+                laufend = {}
+                gezaehlte_zeilen = 0
+                continue
+        for index_, wert in werte.items():
+            laufend[index_] = laufend.get(index_, 0.0) + wert
         gezaehlte_zeilen += 1
     return rows
 

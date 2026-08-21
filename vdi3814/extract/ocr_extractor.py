@@ -204,18 +204,63 @@ def _ist_linienrest(arr: np.ndarray) -> bool:
     return False
 
 
-def _lies_ziffer(zelle: Image.Image, mindest_konfidenz: float = 55.0) -> str:
-    """Liest eine einzelne Zelle und verwirft unsichere Treffer."""
+def _ziffernblob(feld: np.ndarray):
+    """Schneidet die Tinte einer Zelle frei.
+
+    Entfernt zuerst durchgehende dunkle Reihen und Spalten - das sind Reste des
+    Zellrahmens, die sonst als Ziffer mitgelesen werden. Uebrig bleibt der
+    Zahlenwert als eng begrenzter Ausschnitt.
+    """
+    dunkel = feld < 128
+    if not dunkel.any():
+        return None
+    rein = dunkel.copy()
+    rein[dunkel.mean(axis=1) > 0.8, :] = False
+    rein[:, dunkel.mean(axis=0) > 0.8] = False
+    if not rein.any():
+        return None
+    ys, xs = np.where(rein)
+    return feld[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+
+
+def _lies_ziffer(zelle, mindest_konfidenz: float = 30.0) -> str:
+    """Liest den Zahlenwert einer Tabellenzelle.
+
+    Zwei Besonderheiten gescannter Funktionslisten machen das noetig:
+
+    * Die Ziffer 1 ist ein schmaler senkrechter Strich. Texterkennung liefert
+      dafuer verlaesslich nichts - erkannt wird sie deshalb an ihrer Form
+      (deutlich schmaler als hoch). Genau dieser Wert ist in GA-Funktions-
+      listen der haeufigste, ihn zu verlieren waere der groesste Fehler.
+    * Fuer die uebrigen Ziffern ist "--psm 8" (ein Wort) der richtige Modus;
+      "--psm 10" (ein Zeichen) liefert bei diesen Groessen oft gar nichts.
+    """
     import pytesseract
 
+    feld = np.asarray(zelle.convert("L"), dtype=np.uint8) if hasattr(zelle, "convert") else zelle
+    blob = _ziffernblob(feld)
+    if blob is None:
+        return ""
+    hoehe, breite = blob.shape
+    if hoehe < 4 or breite < 1:
+        return ""
+    if breite / hoehe < 0.45:
+        return "1"
+
+    rand = 10
+    leinwand = np.full((hoehe + 2 * rand, breite + 2 * rand), 255, dtype=np.uint8)
+    leinwand[rand:rand + hoehe, rand:rand + breite] = blob
+    bild = Image.fromarray(leinwand)
+    bild = bild.resize((bild.width * 6, bild.height * 6), Image.LANCZOS)
+
     daten = pytesseract.image_to_data(
-        zelle, config="--psm 10 -c tessedit_char_whitelist=0123456789xX",
+        bild, config="--psm 8 -c tessedit_char_whitelist=0123456789",
         output_type=pytesseract.Output.DICT,
     )
     bester, beste_konfidenz = "", -1.0
     for index, text in enumerate(daten["text"]):
         text = (text or "").strip()
-        if not text:
+        if not text or not text.isdigit() or len(text) > 3:
             continue
         try:
             konfidenz = float(daten["conf"][index])
@@ -300,11 +345,9 @@ def zellen_ocr(image: Image.Image, spalten_kanten: list[float], zeilen_kanten: l
             ausschnitt = arr[oben + 3:unten - 2, int(links) + 3:int(rechts) - 2]
             if not _hat_inhalt(ausschnitt) or _ist_linienrest(ausschnitt):
                 continue
-            zelle = grau.crop((int(links) + 3, oben + 3, int(rechts) - 2, unten - 2))
-            if zelle.width < 4 or zelle.height < 4:
+            if ausschnitt.shape[0] < 4 or ausschnitt.shape[1] < 4:
                 continue
-            zelle = zelle.resize((zelle.width * 4, zelle.height * 4), Image.LANCZOS)
-            text = _lies_ziffer(zelle)
+            text = _lies_ziffer(ausschnitt)
             if not text:
                 continue
             laufende_nummer += 1
@@ -623,8 +666,23 @@ def spaltenraster_aus_linien(image: Image.Image) -> "ScanRaster | None":
              len(kanten) - 1, profil.id, round(guete * lesbar_anzahl), lesbar_anzahl, guete * 100)
 
     body_top = float(kopf_unten)
-    zeilen = [y for y in waagerecht if body_top - 2 <= y <= rahmen_unten + 2]
+    zeilen = sorted(y for y in waagerecht if body_top - 2 <= y <= rahmen_unten + 2)
     zeilen_gefunden = len(zeilen) >= 5
+
+    # In vielen Vorlagen steht die Summenzeile UNTERHALB des Tabellenrahmens.
+    # Ohne ein zusaetzliches Band dort wird sie nicht gelesen - und damit
+    # faellt die wichtigste Kontrolle der Seite weg.
+    if len(zeilen) >= 3:
+        hoehen = sorted(b - a for a, b in zip(zeilen, zeilen[1:]) if b - a > 4)
+        if hoehen:
+            zeilenhoehe = hoehen[len(hoehen) // 2]
+            # Zwei zusaetzliche Kanten, damit unterhalb des Rahmens ein ganzes
+            # Zeilenband entsteht - eine einzelne Kante erzeugt nur die Luecke
+            # zwischen Rahmen und Summenzeile.
+            for faktor in (1.0, 2.2, 3.4):
+                kante = min(int(zeilen[-1] + faktor * zeilenhoehe), grau.shape[0] - 1)
+                if kante > zeilen[-1] + 4:
+                    zeilen.append(kante)
 
     return ScanRaster(
         zeilen_gefunden=zeilen_gefunden,
