@@ -13,10 +13,17 @@ Blaetter:
 
 Die Kostenspalten sind bewusst Formeln und keine festen Werte, damit in Excel
 mit geaenderten Einheitspreisen sofort weitergerechnet werden kann.
+
+Ebenso sind die Mengen der "Übersicht" keine Kopien, sondern SUMIFS-Formeln auf
+die Zeilen der zugehoerigen "GA-Funktionsliste". Wer dort Zeilen loescht oder
+ergaenzt, sieht die Aenderung sofort in "Übersicht", "Spaltensummen" und
+"Kostenschätzung". Verknuepft wird ueber eine ausgeblendete Schluesselspalte,
+weil Dateinamen nicht eindeutig sein muessen.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +33,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .aggregate import SCHLUESSEL_SPALTE
 from .config import SETTINGS
 
 HEADER_FILL = PatternFill("solid", fgColor="DDE5F0")
@@ -34,6 +42,40 @@ THIN = Side(style="thin", color="9BA7B4")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 TOTAL_FILL = PatternFill("solid", fgColor="F2F2F2")
 HEADER_FONT = Font(bold=True)
+
+# Mengen werden als Formel geschrieben. Damit die Liste trotzdem so licht
+# aussieht wie die Papiervorlage, bleiben Nullen unsichtbar.
+MENGE_FORMAT = "0.###;-0.###;;@"
+
+
+@dataclass(frozen=True)
+class _ListenBezug:
+    """Wo die Datenzeilen einer "GA-Funktionsliste" im Arbeitsblatt stehen.
+
+    Damit kann die "Übersicht" auf das Blatt verweisen, obwohl sie vorher
+    geschrieben wird - die Geometrie des Layoutblatts steht vorab fest.
+    """
+
+    blatt: str
+    erste_zeile: int
+    letzte_zeile: int
+    erste_spalte: int
+    schluessel_spalte: int
+
+    def _bereich(self, spalte: int, fest: bool = False) -> str:
+        buchstabe = get_column_letter(spalte)
+        dollar = "$" if fest else ""
+        return (f"'{self.blatt}'!{dollar}{buchstabe}${self.erste_zeile}:"
+                f"{dollar}{buchstabe}${self.letzte_zeile}")
+
+    def menge_formel(self, spalten_index: int, kriterium: str) -> str:
+        """Summe einer Funktionsspalte ueber alle Zeilen einer Liste."""
+        return (f"=SUMIFS({self._bereich(self.erste_spalte + spalten_index)},"
+                f"{self._bereich(self.schluessel_spalte, fest=True)},{kriterium})")
+
+    def datenpunkt_formel(self, kriterium: str) -> str:
+        """Anzahl der Zeilen, die zu einer Liste gehoeren."""
+        return f"=COUNTIFS({self._bereich(self.schluessel_spalte, fest=True)},{kriterium})"
 
 
 def _write_frame(sheet: Worksheet, frame: pd.DataFrame, freeze: str = "A2") -> None:
@@ -66,11 +108,14 @@ def _autosize(sheet: Worksheet, maximum: int = 55) -> None:
         sheet.column_dimensions[letter].width = min(max(10, width + 2), maximum)
 
 
-def _sheet_spaltensummen(workbook: Workbook, summary: pd.DataFrame) -> int:
+def _sheet_spaltensummen(workbook: Workbook, summary: pd.DataFrame,
+                         bezuege: dict[str, str] | None = None) -> int:
     """Flache Liste aller Funktionsspalten mit ihrer Gesamtmenge.
 
     Ergaenzt die Uebersicht im VDI-Aufbau: hier laesst sich nach Gruppe oder
-    Menge sortieren und filtern.
+    Menge sortieren und filtern. Die Menge verweist - wo moeglich - auf die
+    Summenzeile der Uebersicht, damit auch dieses Blatt mitzieht, wenn in der
+    "GA-Funktionsliste" Zeilen geloescht werden.
     """
     sheet = workbook.create_sheet("Spaltensummen")
     frame = summary.rename(columns={
@@ -90,6 +135,10 @@ def _sheet_spaltensummen(workbook: Workbook, summary: pd.DataFrame) -> int:
     last_row = sheet.max_row
     menge_col = list(frame.columns).index("Menge") + 1
     letter = get_column_letter(menge_col)
+    for offset, schluessel in enumerate(summary["spalte_key"], start=2):
+        bezug = (bezuege or {}).get(schluessel)
+        if bezug:
+            sheet.cell(row=offset, column=menge_col, value=f"={bezug}")
     total_row = last_row + 1
     sheet.cell(row=total_row, column=1, value="Summe Funktionen").font = HEADER_FONT
     total_cell = sheet.cell(row=total_row, column=menge_col,
@@ -166,6 +215,19 @@ def export_workbook(path: str | Path,
 
     from .profiles_loader import get_profile
 
+    # Die Funktionslisten werden erst spaeter geschrieben, ihre Geometrie steht
+    # aber schon fest. So kann die Uebersicht bereits auf sie verweisen und
+    # trotzdem als erstes Blatt stehen.
+    listen_titel: dict[str, str] = {}
+    listen_bezug: dict[str, _ListenBezug] = {}
+    for profile_id, frame in (layouts or {}).items():
+        profile = get_profile(profile_id)
+        if profile is None or frame is None or frame.empty:
+            continue
+        listen_titel[profile_id] = f"GA-Funktionsliste {profile.fassung}"[:31]
+        listen_bezug[profile_id] = _bezug_funktionsliste(
+            listen_titel[profile_id], len(frame), len(profile.columns))
+
     # Zuerst die Uebersicht im Aufbau der VDI-Funktionsliste: eine Zeile je
     # importierter Datei, darunter Summe, Einheitspreis und Kosten.
     bezuege: dict[str, str] = {}
@@ -175,18 +237,18 @@ def export_workbook(path: str | Path,
         if profile is None or matrix is None or matrix.empty:
             continue
         titel = (f"Übersicht {profile.fassung}" if mehrere else "Übersicht")[:31]
-        bezuege.update(_sheet_uebersicht_vdi(workbook, titel, profile, matrix, prices, currency))
+        bezuege.update(_sheet_uebersicht_vdi(workbook, titel, profile, matrix, prices,
+                                             currency, listen_bezug.get(profile_id)))
 
     # Danach die Funktionslisten im Original-Layout - dort stehen die einzelnen
     # Datenpunkte, auf denen die Mengen beruhen.
     for profile_id, frame in (layouts or {}).items():
-        profile = get_profile(profile_id)
-        if profile is None or frame is None or frame.empty:
+        if profile_id not in listen_titel:
             continue
-        titel = f"GA-Funktionsliste {profile.fassung}"[:31]
-        _sheet_vdi_layout(workbook, titel, frame, profile, prices, currency)
+        _sheet_vdi_layout(workbook, listen_titel[profile_id], frame,
+                          get_profile(profile_id), prices, currency)
 
-    menge_col = _sheet_spaltensummen(workbook, summary)
+    menge_col = _sheet_spaltensummen(workbook, summary, bezuege)
     _sheet_costs(workbook, summary, prices, menge_col, currency, bezuege)
 
     if pruefung is not None and not pruefung.empty:
@@ -201,11 +263,18 @@ def export_workbook(path: str | Path,
     info.append(["VDI 3814 DP-Checker"])
     info.append(["Erstellt am", datetime.now().replace(microsecond=0)])
     info.append(["Dateien", int(documents.shape[0]) if not documents.empty else 0])
-    info.append(["Datenpunkte", int(raw["datenpunkt"].nunique()) if not raw.empty else 0])
-    info.append(["Funktionen gesamt", float(summary["menge"].sum()) if not summary.empty else 0.0])
+    info.append(["Datenpunkte (Stand Export)",
+                 int(raw["datenpunkt"].nunique()) if not raw.empty else 0])
+    info.append(["Funktionen gesamt (Stand Export)",
+                 float(summary["menge"].sum()) if not summary.empty else 0.0])
     info.append([])
     info.append(["Hinweis", "Mengen und Kosten sind Formeln - Einheitspreise koennen "
                             "direkt in 'Kostenschaetzung' geaendert werden."])
+    info.append(["Hinweis", "Zeilen in 'GA-Funktionsliste' duerfen geloescht werden: "
+                            "'Uebersicht', 'Spaltensummen' und 'Kostenschaetzung' "
+                            "rechnen automatisch neu. Die ausgeblendete Spalte "
+                            "'Schluessel' stellt die Verknuepfung her und sollte "
+                            "stehen bleiben."])
     info["A1"].font = Font(bold=True, size=14)
     _autosize(info)
 
@@ -218,6 +287,38 @@ def export_workbook(path: str | Path,
 # --------------------------------------------------------------------------
 
 ROW_FIELD_COUNT = 6      # Datei, Blatt, Zeile Nr., Datenpunkt, Benutzeradresse, Typ
+LAYOUT_ERSTE_DATENZEILE = 6   # darueber liegen die fuenf Kopfzeilen der Vorlage
+
+
+def _bezug_funktionsliste(titel: str, zeilen: int, spalten: int) -> _ListenBezug:
+    """Geometrie des Layoutblatts - berechnet, bevor es geschrieben wird."""
+    erste_spalte = ROW_FIELD_COUNT + 1
+    bemerkung_spalte = erste_spalte + spalten
+    return _ListenBezug(
+        blatt=titel,
+        erste_zeile=LAYOUT_ERSTE_DATENZEILE,
+        letzte_zeile=LAYOUT_ERSTE_DATENZEILE + zeilen - 1,
+        erste_spalte=erste_spalte,
+        schluessel_spalte=bemerkung_spalte + 1,
+    )
+
+
+def _schluessel_spalte(sheet: Worksheet, spalte: int, letzte_kopfzeile: int) -> None:
+    """Ausgeblendete Spalte mit dem Schluessel der Liste.
+
+    Sie traegt die Verknuepfung zwischen "GA-Funktionsliste" und "Übersicht"
+    und soll beim Arbeiten mit der Liste nicht stoeren.
+    """
+    cell = sheet.cell(row=1, column=spalte, value=SCHLUESSEL_SPALTE)
+    cell.font = HEADER_FONT
+    cell.fill = HEADER_FILL
+    cell.alignment = Alignment(vertical="center", wrap_text=True)
+    if letzte_kopfzeile > 1:
+        sheet.merge_cells(start_row=1, start_column=spalte,
+                          end_row=letzte_kopfzeile, end_column=spalte)
+    dimension = sheet.column_dimensions[get_column_letter(spalte)]
+    dimension.width = 12
+    dimension.hidden = True
 
 
 def _schreibe_vdi_kopf(sheet: Worksheet, columns: list, kopf_titel: list[str],
@@ -289,12 +390,19 @@ def _schreibe_vdi_kopf(sheet: Worksheet, columns: list, kopf_titel: list[str],
 
 
 def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.DataFrame,
-                          prices: dict[str, float], currency: str) -> dict[str, str]:
+                          prices: dict[str, float], currency: str,
+                          liste: _ListenBezug | None = None) -> dict[str, str]:
     """Uebersicht im Aufbau der VDI-Funktionsliste - eine Zeile je Datei.
 
     Das ist die Sicht fuer die Kalkulation: welche Mengen stecken in welcher
     Liste, was ergibt das in Summe, und was kostet es bei welchem
     Einheitspreis. Alle Summen und Kosten sind Formeln.
+
+    Liegt die zugehoerige "GA-Funktionsliste" mit im Export (``liste``), sind
+    auch die Mengen je Datei Formeln: sie zaehlen ueber die ausgeblendete
+    Schluesselspalte genau die Zeilen jener Liste zusammen. Werden dort Zeilen
+    geloescht, rechnet die Uebersicht sofort neu. Ohne Layoutblatt bleiben die
+    Mengen feste Werte - dann gibt es nichts, worauf zu verweisen waere.
 
     Rueckgabe: je Spaltenschluessel der Bezug auf die Summenzelle, damit die
     Kostenschaetzung auf dieselbe Zahl verweist statt sie zu kopieren.
@@ -306,19 +414,32 @@ def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.Da
         sheet, columns, kopf_titel, schluss_titel=f"Funktionen gesamt")
     letzte_spalte = erste_spalte + len(columns) - 1
     summe_spalte = erste_spalte + len(columns)
+    schluessel_spalte = summe_spalte + 1
+    schluessel_buchstabe = get_column_letter(schluessel_spalte)
 
     zeile = erste_zeile
     for record in matrix.to_dict("records"):
+        kriterium = f"${schluessel_buchstabe}{zeile}"
         for index, titel in enumerate(kopf_titel):
             wert = record.get(titel, "")
             cell = sheet.cell(row=zeile, column=1 + index, value=_clean(wert))
             cell.border = BOX
+        if liste is not None:
+            sheet.cell(row=zeile, column=1 + kopf_titel.index("Datenpunkte"),
+                       value=liste.datenpunkt_formel(kriterium))
         for index, column in enumerate(columns):
             menge = float(record.get(column.key, 0.0) or 0.0)
             cell = sheet.cell(row=zeile, column=erste_spalte + index,
                               value=menge if menge else None)
+            if liste is not None:
+                # Statt der Kopie die Formel auf die Funktionsliste - nur so
+                # wirkt sich ein Loeschen von Zeilen dort hier aus.
+                cell.value = liste.menge_formel(index, kriterium)
+                cell.number_format = MENGE_FORMAT
             cell.alignment = Alignment(horizontal="center")
             cell.border = BOX
+        sheet.cell(row=zeile, column=schluessel_spalte,
+                   value=record.get(SCHLUESSEL_SPALTE, ""))
         gesamt = sheet.cell(
             row=zeile, column=summe_spalte,
             value=f"=SUM({get_column_letter(erste_spalte)}{zeile}:"
@@ -380,6 +501,7 @@ def _sheet_uebersicht_vdi(workbook: Workbook, title: str, profile, matrix: pd.Da
     for spalte in range(erste_spalte, summe_spalte + 1):
         sheet.column_dimensions[get_column_letter(spalte)].width = 6
     sheet.column_dimensions[get_column_letter(summe_spalte)].width = 14
+    _schluessel_spalte(sheet, schluessel_spalte, letzte_kopfzeile=3)
     return bezuege
 
 
@@ -397,6 +519,7 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
     columns = list(profile.columns)
     first_data_column = ROW_FIELD_COUNT + 1
     remark_column = first_data_column + len(columns)
+    schluessel_spalte = remark_column + 1
 
     kopf_titel = ["Datei", "Blatt", "Zeile Nr.", "Datenpunkt", "Benutzeradresse", "Typ"]
 
@@ -455,7 +578,7 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
     sheet.merge_cells(start_row=1, start_column=remark_column, end_row=3, end_column=remark_column)
 
     # --- Datenzeilen ---
-    erste_datenzeile = 6
+    erste_datenzeile = LAYOUT_ERSTE_DATENZEILE
     zeile = erste_datenzeile
     for record in frame.to_dict("records"):
         for index, titel in enumerate(kopf_titel):
@@ -467,6 +590,9 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
             zelle = sheet.cell(row=zeile, column=first_data_column + index, value=wert)
             zelle.alignment = Alignment(horizontal="center")
         sheet.cell(row=zeile, column=remark_column, value=record.get("Bemerkungen", ""))
+        # Traegt die Zeile ihrer Liste zu - darueber summiert die Uebersicht.
+        sheet.cell(row=zeile, column=schluessel_spalte,
+                   value=record.get(SCHLUESSEL_SPALTE, ""))
         zeile += 1
     letzte_datenzeile = zeile - 1
 
@@ -517,3 +643,4 @@ def _sheet_vdi_layout(workbook: Workbook, title: str, frame: pd.DataFrame, profi
     for index, breite in enumerate((26, 7, 8, 34, 22, 12), start=1):
         sheet.column_dimensions[get_column_letter(index)].width = breite
     sheet.column_dimensions[gesamt_spalte].width = 40
+    _schluessel_spalte(sheet, schluessel_spalte, letzte_kopfzeile=3)

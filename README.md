@@ -144,9 +144,9 @@ Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten S
 
 | Blatt | Inhalt |
 |---|---|
-| **Übersicht** | Das VDI-3814-Blatt für die Kalkulation: **eine Zeile je importierter Liste** mit ihren Mengen je Funktionsspalte, rechts die Gesamtzahl der Funktionen dieser Liste. Darunter „Summe Funktionen" (Formel), eine Zeile für **Einheitspreise** und die daraus berechneten Kosten. Liegen beide Fassungen vor, gibt es je Fassung ein Blatt |
-| **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – die Grundlage der Mengen |
-| **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar |
+| **Übersicht** | Das VDI-3814-Blatt für die Kalkulation: **eine Zeile je importierter Liste** mit ihren Mengen je Funktionsspalte, rechts die Gesamtzahl der Funktionen dieser Liste. Die Mengen sind **Formeln auf die „GA-Funktionsliste"**. Darunter „Summe Funktionen" (Formel), eine Zeile für **Einheitspreise** und die daraus berechneten Kosten. Liegen beide Fassungen vor, gibt es je Fassung ein Blatt |
+| **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – die Grundlage der Mengen. **Zeilen dürfen hier gelöscht werden**, die Übersicht rechnet automatisch neu |
+| **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar (Menge als **Formel** auf die Übersicht) |
 | **Kostenschätzung** | Je Spalte: Menge (**Formel** auf die Übersicht), Einheitspreis, Kosten, Gesamtkosten |
 | **Prüfung** | Je Seite der Abgleich mit der Zeile „Summe Funktionen" und jede nicht gezählte Zeile mit Begründung |
 | **Rohdaten** | Jede einzelne Zelle mit Quelldatei, Seite, Zeilennummer, Datenpunkt und Wert |
@@ -156,6 +156,16 @@ Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten S
 Alle Mengen und Kosten sind **Formeln**, keine festen Zahlen: Einheitspreise lassen
 sich direkt in der Übersicht eintragen, alles darunter rechnet sofort mit. Die
 Kostenschätzung verweist auf dieselbe Summenzelle – es gibt nur eine Quelle.
+
+### Zeilen in der GA-Funktionsliste löschen
+
+Die „Übersicht" liest ihre Mengen per `SUMIFS` aus der zugehörigen
+„GA-Funktionsliste" – eine Datenpunktzeile dort zu löschen (oder zu ergänzen)
+schlägt deshalb sofort bis in „Spaltensummen" und „Kostenschätzung" durch.
+Verknüpft wird über die **ausgeblendete Spalte „Schlüssel"** ganz rechts auf
+beiden Blättern; sie ordnet jede Zeile ihrer Liste zu, weil Dateinamen nicht
+eindeutig sein müssen. Diese Spalte sollte stehen bleiben. Wird nur die
+Übersicht exportiert (ohne Layoutblatt), bleiben die Mengen feste Werte.
 
 ---
 

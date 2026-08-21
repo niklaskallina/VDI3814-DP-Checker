@@ -139,6 +139,78 @@ def test_formeln_rechnen_richtig(export):
 
 def test_zeilensumme_je_datei_stimmt(export):
     """Die Zeilensumme einer Datei muss deren Gesamtmenge sein."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+    # Ganz rechts liegt die ausgeblendete Schluesselspalte, davor "Funktionen gesamt".
+    gesamt_spalte = blatt.max_column - 1
+    letzte = get_column_letter(gesamt_spalte)
+
+    werte = _rechne(ziel)
+
+    zeile = 6
+    while str(blatt.cell(zeile, 1).value or "").endswith(".pdf"):
+        einzeln = sum(_zahl(werte, name, spalte, zeile)
+                      for spalte in range(7, gesamt_spalte))
+        gesamt = werte.get((name.upper(), f"{letzte}{zeile}"))
+        assert float(gesamt) == pytest.approx(einzeln)
+        zeile += 1
+    assert zeile > 6, "es muss mindestens eine Dateizeile geben"
+
+
+def test_uebersicht_haengt_an_der_ga_funktionsliste(export):
+    """Ohne Verknuepfung wuerde ein Loeschen von Zeilen unbemerkt bleiben."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    blatt = buch[name]
+    liste = [n for n in buch.sheetnames if n.startswith("GA-Funktionsliste")][0]
+
+    # Verknuepft wird ueber einen Schluessel je Liste - Dateinamen sind nicht
+    # eindeutig. Die Spalte steht ganz rechts und ist ausgeblendet.
+    schluessel = blatt.max_column
+    assert blatt.cell(1, schluessel).value == "Schlüssel"
+    assert blatt.column_dimensions[get_column_letter(schluessel)].hidden
+    assert blatt.cell(6, schluessel).value == buch[liste].cell(6, buch[liste].max_column).value
+
+    # Mengen und Datenpunkte werden gezaehlt, nicht kopiert.
+    menge = str(blatt.cell(6, 7).value)
+    assert menge.startswith("=SUMIFS("), menge
+    assert f"'{liste}'!" in menge
+    assert str(blatt.cell(6, 6).value).startswith("=COUNTIFS(")
+
+    # Auch die flache Spaltenliste zieht die Menge aus der Uebersicht.
+    assert str(buch["Spaltensummen"].cell(2, 7).value).startswith("='Übersicht")
+
+
+def test_geloeschte_zeile_wirkt_bis_in_die_kosten(export, tmp_path):
+    """Der eigentliche Zweck: in der GA-Funktionsliste darf geloescht werden."""
+    ziel, _ = export
+    buch = openpyxl.load_workbook(ziel)
+    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
+    liste = buch[[n for n in buch.sheetnames if n.startswith("GA-Funktionsliste")][0]]
+
+    gesamt_zelle = (f"{get_column_letter(buch[name].max_column - 1)}"
+                    f"{buch[name].max_row - 2}")          # Summenzeile, Spalte "Funktionen gesamt"
+    vorher = float(_rechne(ziel)[(name.upper(), gesamt_zelle)])
+
+    # Erste Datenzeile entfernen - so wie es in Excel jemand tun wuerde.
+    entfallen = sum(wert for spalte in range(7, liste.max_column - 1)
+                    if isinstance(wert := liste.cell(6, spalte).value, (int, float)))
+    assert entfallen > 0, "die geloeschte Zeile muss Mengen enthalten"
+    letzte_datenzeile = liste.max_row - 3
+    liste.delete_rows(letzte_datenzeile + 1, 3)   # Summe/Einheitspreis/Kosten der Liste
+    liste.delete_rows(6)
+    gekuerzt = tmp_path / "gekuerzt.xlsx"
+    buch.save(gekuerzt)
+
+    nachher = float(_rechne(gekuerzt)[(name.upper(), gesamt_zelle)])
+    assert nachher == pytest.approx(vorher - entfallen)
+
+
+def _rechne(pfad) -> dict:
+    """Wertet alle Formeln der Mappe aus - Schluessel: (BLATT, "A1")."""
     formulas = pytest.importorskip("formulas", reason="Formelrechner nicht installiert")
     import logging
     import warnings
@@ -146,14 +218,7 @@ def test_zeilensumme_je_datei_stimmt(export):
     warnings.filterwarnings("ignore")
     logging.disable(logging.WARNING)
 
-    ziel, _ = export
-    buch = openpyxl.load_workbook(ziel)
-    name = [n for n in buch.sheetnames if n.startswith("Übersicht")][0]
-    blatt = buch[name]
-    letzte = get_column_letter(blatt.max_column)
-
-    modell = formulas.ExcelModel().loads(str(ziel)).finish()
-    loesung = modell.calculate()
+    loesung = formulas.ExcelModel().loads(str(pfad)).finish().calculate()
     werte = {}
     for schluessel, wert in loesung.items():
         teile = schluessel.split("!")
@@ -163,15 +228,11 @@ def test_zeilensumme_je_datei_stimmt(export):
             werte[(teile[-2].split("]")[-1].strip("'").upper(), teile[-1].strip("'"))] = wert.value[0, 0]
         except Exception:
             continue
+    return werte
 
-    zeile = 6
-    while str(blatt.cell(zeile, 1).value or "").endswith(".pdf"):
-        einzeln = sum(
-            blatt.cell(zeile, spalte).value or 0
-            for spalte in range(7, blatt.max_column)
-            if isinstance(blatt.cell(zeile, spalte).value, (int, float))
-        )
-        gesamt = werte.get((name.upper(), f"{letzte}{zeile}"))
-        assert float(gesamt) == pytest.approx(einzeln)
-        zeile += 1
-    assert zeile > 6, "es muss mindestens eine Dateizeile geben"
+
+def _zahl(werte: dict, blatt: str, spalte: int, zeile: int) -> float:
+    try:
+        return float(werte[(blatt.upper(), f"{get_column_letter(spalte)}{zeile}")])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
