@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy.orm import Session                                     # noqa: E402
 
-from vdi3814 import aggregate, db, evidence, export_excel, projects     # noqa: E402
+from vdi3814 import aggregate, db, evidence, export_excel, projects, schwerpunkt  # noqa: E402
 from vdi3814.config import SETTINGS                                     # noqa: E402
 from vdi3814.costs import apply_prices, price_template, total_cost      # noqa: E402
 from vdi3814.pipeline import process_file, validate_sums                # noqa: E402
@@ -176,6 +176,9 @@ with tab_import:
                 "Datei": name,
                 "Fassung": ergebnis.fassung or "?",
                 "Verfahren": ergebnis.backend,
+                "Schwerpunkte": ", ".join(
+                    e["schwerpunkt"] for e in ergebnis.schwerpunkte()
+                    if e["schwerpunkt"] != schwerpunkt.OHNE_ZUORDNUNG),
                 "Datenpunkte": len(ergebnis.counted_rows()),
                 "Funktionen": ergebnis.grand_total(),
                 "Nicht gezählt": len(ergebnis.excluded_rows()),
@@ -206,11 +209,23 @@ with tab_preview:
         name = st.selectbox("Datei", list(ergebnisse.keys()), key="vorschau_datei")
         ergebnis = ergebnisse[name]
 
-        kopf = st.columns(4)
+        kopf = st.columns(5)
         kopf[0].metric("Datenpunkte", len(ergebnis.counted_rows()))
         kopf[1].metric("Funktionen", f"{ergebnis.grand_total():g}")
         kopf[2].metric("Nicht gezählt", len(ergebnis.excluded_rows()))
         kopf[3].metric("Fassung", ergebnis.fassung or "?")
+        aufteilung = ergebnis.schwerpunkte()
+        kopf[4].metric("Schwerpunkte (ASP/ISP)",
+                       sum(1 for e in aufteilung
+                           if e["schwerpunkt"] != schwerpunkt.OHNE_ZUORDNUNG))
+
+        if aufteilung:
+            st.markdown("**Aufteilung auf die Automations-/Informationsschwerpunkte**")
+            st.dataframe(pd.DataFrame([
+                {"Schwerpunkt": e["schwerpunkt"], "Bezeichnung": e["bezeichnung"],
+                 "Datenpunkte": e["datenpunkte"], "Funktionen": e["funktionen"]}
+                for e in aufteilung
+            ]), width="stretch", hide_index=True)
 
         with st.expander("Kopf-/Fußdaten des Dokuments"):
             spalten = st.columns(4)
@@ -231,6 +246,8 @@ with tab_preview:
 
         st.caption("Zahlenwerte je Funktionsspalte – Korrekturen wirken sofort auf Summen, "
                    "Kosten und Export. Spaltentitel: Abschnitt.Spalte · Bezeichnung. "
+                   "In der Spalte „Schwerpunkt“ lässt sich der ASP/ISP nachtragen "
+                   "oder korrigieren (z. B. „ASP01 Heizungstechnik 2.UG“). "
                    "Ganze Zeilen entfernen: links ankreuzen – einzeln oder mehrere "
                    "auf einmal – und darunter löschen.")
         # Nach dem Loeschen erhaelt der Editor einen neuen Schluessel. Sonst
@@ -316,7 +333,8 @@ with tab_check:
                     options=list(range(len(gefiltert))),
                     format_func=lambda i: (
                         f"{ART_SYMBOL.get(gefiltert[i].art, '•')} {gefiltert[i].datei} "
-                        f"S.{gefiltert[i].anzeige_seite} – {gefiltert[i].titel}"
+                        + (f"[{gefiltert[i].schwerpunkt}] " if gefiltert[i].schwerpunkt else "")
+                        + f"S.{gefiltert[i].anzeige_seite} – {gefiltert[i].titel}"
                     ),
                     key="befund_auswahl",
                 )
@@ -351,7 +369,7 @@ with tab_overview:
     if raw.empty:
         st.info("Noch keine Daten gespeichert.")
     else:
-        filter_spalten = st.columns(4)
+        filter_spalten = st.columns(5)
         with filter_spalten[0]:
             fassung = st.multiselect("Fassung", sorted(raw["fassung"].unique()))
         with filter_spalten[1]:
@@ -359,18 +377,37 @@ with tab_overview:
         with filter_spalten[2]:
             anlage = st.multiselect("Anlage", sorted(raw["anlage"].fillna("").unique()))
         with filter_spalten[3]:
+            schwerpunkt_filter = st.multiselect(
+                "Schwerpunkt (ASP/ISP)", sorted(raw["schwerpunkt"].fillna("").unique()))
+        with filter_spalten[4]:
             gewerk = st.multiselect("Gewerk", sorted(raw["gewerk"].fillna("").unique()))
         gefiltert = raw
         for spalte, werte in (("fassung", fassung), ("projekt", projekt_filter),
-                              ("anlage", anlage), ("gewerk", gewerk)):
+                              ("anlage", anlage), ("schwerpunkt", schwerpunkt_filter),
+                              ("gewerk", gewerk)):
             if werte:
                 gefiltert = gefiltert[gefiltert[spalte].isin(werte)]
 
-        kennzahlen = st.columns(4)
+        kennzahlen = st.columns(5)
         kennzahlen[0].metric("Dateien", gefiltert["dokument_id"].nunique())
-        kennzahlen[1].metric("Datenpunkte", gefiltert["datenpunkt"].nunique())
+        kennzahlen[1].metric("Datenpunkte", gefiltert["zeile_id"].nunique())
         kennzahlen[2].metric("Funktionen gesamt", f"{gefiltert['wert'].sum():g}")
-        kennzahlen[3].metric("Belegte Funktionsspalten", gefiltert["spalte_key"].nunique())
+        kennzahlen[3].metric(
+            "Schwerpunkte (ASP/ISP)",
+            gefiltert.loc[gefiltert["schwerpunkt"] != schwerpunkt.OHNE_ZUORDNUNG,
+                          "schwerpunkt"].nunique())
+        kennzahlen[4].metric("Belegte Funktionsspalten", gefiltert["spalte_key"].nunique())
+
+        # Zuordnung zu den Automations-/Informationsschwerpunkten: welcher ASP
+        # traegt wie viele Datenpunkte und Funktionen?
+        st.markdown("**Datenpunkte und Funktionen je Schwerpunkt (ASP/ISP)**")
+        st.caption("Grundlage ist die Angabe im Kopf-/Fußbereich der Liste bzw. in der "
+                   "Zeile selbst – nachtragen lässt sie sich in Reiter 2.")
+        st.dataframe(aggregate.schwerpunkt_summary(gefiltert).rename(columns={
+            "schwerpunkt": "Schwerpunkt", "bezeichnung": "Bezeichnung", "art": "Art",
+            "datenpunkte": "Datenpunkte", "menge": "Funktionen",
+            "dokumente": "Dateien", "dateien": "Dateinamen",
+        }), width="stretch", hide_index=True)
 
         # Kernansicht: das VDI-Blatt mit einer Zeile je Datei - genau so wird
         # es auch exportiert.
@@ -400,6 +437,17 @@ with tab_overview:
                 st.caption(f"Nur belegte Spalten angezeigt ({len(belegt)} von "
                            f"{len(profile.columns)}); der Export enthält alle.")
 
+                sp_matrix = aggregate.schwerpunkt_matrix(session, profil)
+                if not sp_matrix.empty:
+                    st.markdown("**Dieselbe Aufstellung je Schwerpunkt (ASP/ISP)**")
+                    sp_anzeige = sp_matrix.copy()
+                    sp_anzeige["Funktionen gesamt"] = sp_anzeige[
+                        [c.key for c in profile.columns]].sum(axis=1)
+                    sp_spalten = ["Schwerpunkt", "Bezeichnung", "Datei", "Datenpunkte",
+                                  "Funktionen gesamt"] + belegt
+                    st.dataframe(sp_anzeige[sp_spalten].rename(columns=titel),
+                                 width="stretch", hide_index=True)
+
         st.markdown("**Summen je Funktionsspalte**")
         st.dataframe(aggregate.column_summary(gefiltert), width="stretch", hide_index=True)
         links, rechts = st.columns(2)
@@ -407,7 +455,8 @@ with tab_overview:
             st.markdown("**Je Spaltengruppe**")
             st.dataframe(aggregate.group_summary(gefiltert), width="stretch", hide_index=True)
         with rechts:
-            dimension = st.selectbox("Aufschlüsselung nach", ["projekt", "anlage", "gewerk", "datei"])
+            dimension = st.selectbox("Aufschlüsselung nach",
+                                     ["schwerpunkt", "projekt", "anlage", "gewerk", "datei"])
             st.dataframe(aggregate.by_dimension(gefiltert, dimension),
                          width="stretch", hide_index=True)
         with st.expander("Drilldown auf jede einzelne Zelle"):
@@ -517,6 +566,9 @@ with tab_export:
                     pruefung=aggregate.pruefbericht(session),
                     matrizen={profil: aggregate.datei_spalten_matrix(session, profil)
                               for profil in aggregate.profiles_in_use(session)},
+                    schwerpunkte=aggregate.schwerpunkt_summary(raw),
+                    schwerpunkt_matrizen={profil: aggregate.schwerpunkt_matrix(session, profil)
+                                          for profil in aggregate.profiles_in_use(session)},
                 )
             st.success(f"Geschrieben: {pfad}")
             st.download_button("Datei herunterladen", data=Path(pfad).read_bytes(),
@@ -539,13 +591,14 @@ with tab_data:
     else:
         st.markdown("**Importierte Dateien** – zum Löschen ankreuzen")
         auswahl_frame = dokumente[["dokument_id", "datei", "fassung", "verfahren",
-                                   "datenpunkte", "summe_funktionen", "importiert_am"]].copy()
+                                   "schwerpunkte", "datenpunkte", "summe_funktionen",
+                                   "importiert_am"]].copy()
         auswahl_frame.insert(0, "löschen", False)
         bearbeitet = st.data_editor(
             auswahl_frame, width="stretch", hide_index=True, num_rows="fixed",
             key="dokument_auswahl",
-            disabled=["dokument_id", "datei", "fassung", "verfahren", "datenpunkte",
-                      "summe_funktionen", "importiert_am"],
+            disabled=["dokument_id", "datei", "fassung", "verfahren", "schwerpunkte",
+                      "datenpunkte", "summe_funktionen", "importiert_am"],
         )
         zu_loeschen = [int(row["dokument_id"]) for _, row in bearbeitet.iterrows() if row["löschen"]]
         if zu_loeschen and st.button(f"{len(zu_loeschen)} Datei(en) löschen", type="primary"):

@@ -193,3 +193,26 @@ def test_geloeschte_zeilen_landen_nicht_in_der_datenbank(eigene_ablage, samples)
 
     assert len(geladen.data_rows()) == erwartet
     assert geladen.grand_total() == ergebnis.grand_total()
+
+
+def test_korrekturtabelle_traegt_den_schwerpunkt_mit(samples):
+    """Die ASP/ISP-Spalte muss den Umweg ueber die Tabelle unbeschadet ueberstehen.
+
+    Anzeige und Ruecklesen liegen in vdi3814.ui.table - genau dort trafen die
+    Ankreuzspalte und die Schwerpunktspalte aufeinander.
+    """
+    from vdi3814.ui.table import ROW_FIELDS, frame_to_result, result_to_frame
+
+    ergebnis = process_file(samples["asp"])
+    assert "Schwerpunkt" in ROW_FIELDS
+
+    frame = result_to_frame(ergebnis)
+    assert [z for z in frame["Schwerpunkt"] if z], "kein Schwerpunkt in der Tabelle"
+
+    frame.loc[0, "Schwerpunkt"] = "ASP07 Kaeltetechnik"
+    frame_to_result(frame, ergebnis)
+    erste = ergebnis.data_rows()[0]
+
+    assert erste.schwerpunkt == "ASP07"
+    assert erste.schwerpunkt_text == "Kaeltetechnik"
+    assert result_to_frame(ergebnis).loc[0, "Schwerpunkt"].startswith("ASP07")

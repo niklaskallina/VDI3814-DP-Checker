@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from . import aggregate, db, evidence, export_excel, projects
+from . import aggregate, db, evidence, export_excel, projects, schwerpunkt
 from .config import SETTINGS, bundled_tesseract
 from .costs import price_template
 from .ingest.loader import collect_files
@@ -123,8 +123,12 @@ def cmd_import(args) -> int:
     saved = 0
     with Session(engine) as session:
         for result in results:
+            kennungen = ", ".join(
+                eintrag["schwerpunkt"] for eintrag in result.schwerpunkte()
+                if eintrag["schwerpunkt"] != schwerpunkt.OHNE_ZUORDNUNG)
             status = f"{result.file_name}: {len(result.data_rows())} Datenpunkte, " \
-                     f"Summe {result.grand_total():g}, Fassung {result.fassung or '?'}"
+                     f"Summe {result.grand_total():g}, Fassung {result.fassung or '?'}" \
+                     + (f", Schwerpunkte: {kennungen}" if kennungen else "")
             for warning in result.warnings:
                 status += f"\n     ! {warning}"
             print("  ", status)
@@ -144,8 +148,8 @@ def cmd_list(args) -> int:
     if frame.empty:
         print("Datenbank ist leer.")
         return 0
-    print(frame[["dokument_id", "datei", "fassung", "verfahren", "datenpunkte",
-                 "summe_funktionen", "seiten_uebersprungen"]].to_string(index=False))
+    print(frame[["dokument_id", "datei", "fassung", "verfahren", "schwerpunkte",
+                 "datenpunkte", "summe_funktionen", "seiten_uebersprungen"]].to_string(index=False))
     return 0
 
 
@@ -197,6 +201,9 @@ def cmd_export(args) -> int:
             pruefung=aggregate.pruefbericht(session),
             matrizen={profile_id: aggregate.datei_spalten_matrix(session, profile_id)
                       for profile_id in aggregate.profiles_in_use(session)},
+            schwerpunkte=aggregate.schwerpunkt_summary(raw),
+            schwerpunkt_matrizen={profile_id: aggregate.schwerpunkt_matrix(session, profile_id)
+                                  for profile_id in aggregate.profiles_in_use(session)},
         )
     print(f"Export geschrieben: {path}")
     return 0
@@ -243,9 +250,26 @@ def cmd_check_data(args) -> int:
         return 0
     for befund in befunde:
         werte = ", ".join(f"{k}: {v:g}" for k, v in befund.werte.items())
-        print(f"[{befund.art:14s}] {befund.datei} S.{befund.anzeige_seite}: {befund.titel}"
+        print(f"[{befund.art:14s}] {befund.datei} "
+              f"{('[' + befund.schwerpunkt + '] ') if befund.schwerpunkt else ''}"
+              f"S.{befund.anzeige_seite}: {befund.titel}"
               + (f"  ({werte})" if werte else ""))
     print(f"\n{len(befunde)} Befund(e). Details mit Seitenansicht in der Oberflaeche.")
+    return 0
+
+
+def cmd_schwerpunkte(args) -> int:
+    """Datenpunkte und Funktionen je Automations-/Informationsschwerpunkt."""
+    engine = _engine(args)
+    with Session(engine) as session:
+        frame = aggregate.schwerpunkt_summary(aggregate.raw_dataframe(session))
+    if frame.empty:
+        print("Keine Daten - bitte zuerst importieren.")
+        return 0
+    print(frame[["schwerpunkt", "bezeichnung", "datenpunkte", "menge", "dateien"]]
+          .to_string(index=False))
+    print(f"\nSumme: {int(frame['datenpunkte'].sum())} Datenpunkte, "
+          f"{frame['menge'].sum():g} Funktionen")
     return 0
 
 
@@ -307,6 +331,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     pruefen = sub.add_parser("pruefen", help="Abweichungen und nicht gezaehlte Zeilen auflisten")
     pruefen.set_defaults(func=cmd_check_data)
+
+    schwerpunkte = sub.add_parser(
+        "schwerpunkte", help="Datenpunkte und Funktionen je ASP/ISP anzeigen")
+    schwerpunkte.set_defaults(func=cmd_schwerpunkte)
 
     profiles = sub.add_parser("profile", help="hinterlegte Spalten-Profile anzeigen")
     profiles.add_argument("--ausfuehrlich", action="store_true")

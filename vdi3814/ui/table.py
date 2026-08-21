@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from vdi3814.models import Cell, ColumnHeader, DocumentResult, RowKind
+from vdi3814 import schwerpunkt
+from vdi3814.models import Cell, ColumnHeader, DataPointRow, DocumentResult, RowKind
 
-ROW_FIELDS = ["Zeile", "Datenpunkt", "Benutzeradresse", "Typ", "Bemerkung"]
+ROW_FIELDS = ["Zeile", "Schwerpunkt", "Datenpunkt", "Benutzeradresse", "Typ", "Bemerkung"]
 DELETE_FIELD = "Löschen"   # Ankreuzspalte zum Entfernen ganzer Zeilen
 
 
@@ -33,6 +34,7 @@ def result_to_frame(result: DocumentResult) -> pd.DataFrame:
         record = {
             DELETE_FIELD: False,
             "Zeile": row.row_no,
+            "Schwerpunkt": row.schwerpunkt_anzeige(),
             "Datenpunkt": row.klartext,
             "Benutzeradresse": row.bas,
             "Typ": row.qualifier,
@@ -45,6 +47,21 @@ def result_to_frame(result: DocumentResult) -> pd.DataFrame:
     return pd.DataFrame(records, columns=spalten)
 
 
+def _schwerpunkt_aus_text(text: str, row: DataPointRow) -> tuple[str, str]:
+    """Eingabe "ASP01 Heizungstechnik" in Kennung und Bezeichnung zerlegen.
+
+    Steht kein ASP/ISP im Text, bleibt die erkannte Kennung stehen und der
+    Text gilt als Bezeichnung - so laesst sich beides einzeln nachtragen.
+    """
+    text = str(text or "").strip()
+    if not text:
+        return "", ""
+    gefunden = schwerpunkt.parse(text)
+    if gefunden is not None:
+        return gefunden.kennung, gefunden.bezeichnung
+    return row.schwerpunkt, text
+
+
 def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResult:
     columns = [c for c in result.columns if not c.is_note_column]
     title_to_index = {column_title(c): c.index for c in columns}
@@ -54,6 +71,8 @@ def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResu
             break
         row = data_rows[position]
         row.row_no = str(record.get("Zeile", "") or "")
+        row.schwerpunkt, row.schwerpunkt_text = _schwerpunkt_aus_text(
+            record.get("Schwerpunkt", ""), row)
         row.klartext = str(record.get("Datenpunkt", "") or "")
         row.bas = str(record.get("Benutzeradresse", "") or "")
         row.qualifier = str(record.get("Typ", "") or "")

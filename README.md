@@ -36,7 +36,7 @@ entpackt sie und startet `VDI3814-DP-Checker.exe`.
 | **1 Import** | Dateien auswählen (mehrere gleichzeitig) und einlesen |
 | **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, einzelne oder mehrere ganze Zeilen löschen, speichern |
 | **3 Nachweis & Differenzen** | Jeden Befund anklicken – die Originalseite wird an der betreffenden Stelle markiert angezeigt |
-| **4 Gesamtübersicht** | Summen über alle Listen, nach Projekt/Anlage/Gewerk aufschlüsselbar |
+| **4 Gesamtübersicht** | Summen über alle Listen, nach Schwerpunkt (ASP/ISP), Projekt/Anlage/Gewerk aufschlüsselbar |
 | **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit |
 | **6 Export** | Excel-Datei mit Funktionsliste, Summen, Kostenblatt und Rohdaten |
 | **7 Projekt & Daten** | Projekte anlegen/löschen, einzelne Dateien aus der Datenbank entfernen |
@@ -58,6 +58,7 @@ anlegen, leeren oder vollständig löschen, ebenso einzelne importierte Dateien.
 | Summen-, Zwischensummen- und **Übertragszeilen** | werden erkannt und **nie mitgezählt**, bleiben aber zur Kontrolle sichtbar |
 | Leerzeilen und Fußbereich | zählen nicht mit; der Datenbereich wird aus den Tabellenlinien hart begrenzt |
 | Freitext in Zellen | wird als Anmerkung geführt, nie als Zahl addiert |
+| **Automations-/Informationsschwerpunkt** | ASP/ISP wird aus Kopf-/Fußbereich, Anlagenangabe oder der Zeile selbst gelesen; jede Auswertung weist aus, wie viele Datenpunkte und Funktionen auf welchen ASP bzw. ISP entfallen |
 | Kontrolle | die eigene Summe wird gegen die Zeile „Summe Funktionen" der Liste geprüft |
 | **Nachweis** | zu jedem Wert und jeder Abweichung zeigt das Programm die markierte Fundstelle im Original |
 | Vorschau & Korrektur | editierbare Tabelle je Datei; ganze Zeilen lassen sich ankreuzen und gesammelt löschen, erst danach speichern |
@@ -90,6 +91,31 @@ Passt der Fingerabdruck nicht, wird bewusst nichts geraten, sondern gemeldet.
 Es werden **keine festen Positionen** verwendet: Spaltenmitten, Tabellenober- und
 -unterkante sowie alle Toleranzen werden für jede Seite neu gemessen.
 
+### Automations- und Informationsschwerpunkt (ASP/ISP)
+
+In den Funktionslisten steht praktisch immer, zu welchem Schwerpunkt eine Seite oder
+eine Zeile gehört. Das Tool sucht die Angabe in dieser Reihenfolge:
+
+1. **die Zeile selbst** – z. B. `ASP01 Heizungstechnik 2.UG` auf einem Übersichtsblatt
+   oder als Zwischenüberschrift; ab dort gilt sie auch für die folgenden Zeilen der Seite.
+   Steht die Bezeichnung eine Zeile unter der Kennung, wird sie von dort übernommen;
+2. **Kopf-/Fußbereich der Seite** – ein Feld `ASP:` / `Informationsschwerpunkt:`;
+3. **die Anlagenangabe** des Blattes, wenn der Schwerpunkt dort mit drin steht
+   (`Anlage: ASP03 Lüftungstechnik`);
+4. nennt eine Seite nur an einer Stelle einen Schwerpunkt, gilt dieser für die ganze Seite.
+
+Erkannt werden `ASP01`, `ASP 1`, `ASP-Nr. 7`, `ISP 02` und die ausgeschriebenen Wörter;
+die Kennung wird auf die Form `ASP01` vereinheitlicht. Wörter wie „Aspiration" lösen
+bewusst **keinen** Treffer aus. Wird nichts gefunden, meldet das Programm dies als
+Hinweis – die Angabe lässt sich im Reiter *Prüfen & korrigieren* je Zeile nachtragen.
+Summen- und Übertragszeilen werden keinem Schwerpunkt zugeschlagen: sie fassen die
+Zeilen darüber zusammen.
+
+> Bestehende Projekte bleiben erhalten – die Datenbank wird beim ersten Start ergänzt.
+> Listen, die **vor** dieser Erweiterung importiert wurden, tragen noch keinen
+> Schwerpunkt; sie werden als *ohne Zuordnung* geführt, bis sie einmal neu
+> eingelesen werden.
+
 > Für besonders schlechte Scans lässt sich zusätzlich ein lokales Vision-Modell
 > (Ollama) einschalten. Das ist optional und für den normalen Betrieb nicht nötig.
 
@@ -118,6 +144,7 @@ VDI3814-DP-Checker.exe check                                :: Einrichtung prüf
 VDI3814-DP-Checker.exe projekt --neu "Neubau Musterstadt"   :: Projekt anlegen
 VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" import C:\Listen
 VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" list
+VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" schwerpunkte  :: je ASP/ISP
 VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" pruefen
 VDI3814-DP-Checker.exe --projekt "Neubau Musterstadt" entfernen 3
 VDI3814-DP-Checker.exe preise --setzen A_1_1=45 A_1_5=80
@@ -136,7 +163,9 @@ python -m vdi3814.cli --projekt Demo export Auswertung.xlsx
 ```
 
 Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten Seite
-„Regelschema", die übersprungen werden muss) und eine der neuen Fassung.
+„Regelschema", die übersprungen werden muss), eine der neuen Fassung und ein
+Übersichtsblatt, auf dem je Zeile ein Automationsschwerpunkt steht (ASP01, ASP02,
+ASP03) – so, wie Plansätze ihre Zusammenstellung führen.
 
 ---
 
@@ -145,7 +174,9 @@ Der Beispieldatensatz enthält eine Liste der alten Fassung (mit einer zweiten S
 | Blatt | Inhalt |
 |---|---|
 | **Übersicht** | Das VDI-3814-Blatt für die Kalkulation: **eine Zeile je importierter Liste** mit ihren Mengen je Funktionsspalte, rechts die Gesamtzahl der Funktionen dieser Liste. Darunter „Summe Funktionen" (Formel), eine Zeile für **Einheitspreise** und die daraus berechneten Kosten. Liegen beide Fassungen vor, gibt es je Fassung ein Blatt |
-| **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – die Grundlage der Mengen |
+| **Schwerpunkte** | Eine Zeile je ASP/ISP: Kennung, Bezeichnung, Anzahl der Datenpunkte und Summe der Funktionen – die Sicht, mit der sich eine Summe auf die einzelnen Automationsschwerpunkte aufteilen lässt |
+| **Mengen je Schwerpunkt** | Dasselbe im VDI-Aufbau: eine Zeile je ASP/ISP mit den Mengen je Funktionsspalte |
+| **GA-Funktionsliste** | Dieselbe Struktur, aber Zeile für Zeile jeder einzelne Datenpunkt – mit dem ASP/ISP, zu dem er gehört. Die Grundlage der Mengen |
 | **Spaltensummen** | Flache Liste aller Funktionsspalten, nach Menge oder Gruppe sortier- und filterbar |
 | **Kostenschätzung** | Je Spalte: Menge (**Formel** auf die Übersicht), Einheitspreis, Kosten, Gesamtkosten |
 | **Prüfung** | Je Seite der Abgleich mit der Zeile „Summe Funktionen" und jede nicht gezählte Zeile mit Begründung |
