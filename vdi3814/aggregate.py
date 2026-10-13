@@ -185,6 +185,13 @@ def pivot_projects(frame: pd.DataFrame) -> pd.DataFrame:
                           margins_name="Gesamt").reset_index()
 
 
+def _schwerpunkt_der_seite(document: db.Document, page_index: int) -> str:
+    for page in document.pages:
+        if page.page_index == page_index and page.schwerpunkt:
+            return page.schwerpunkt
+    return ""
+
+
 def _schwerpunkte_der_datei(document: db.Document) -> list[str]:
     """Alle Schwerpunkte einer Datei in der Reihenfolge des Dokuments."""
     gefunden: list[str] = []
@@ -318,41 +325,48 @@ def profiles_in_use(session: Session) -> list[str]:
 def pruefbericht(session: Session) -> pd.DataFrame:
     """Nachvollziehbare Dokumentation der Zaehlung.
 
-    Enthaelt je Datei den Abgleich mit der Zeile "Summe Funktionen" sowie jede
-    Zeile, die bewusst nicht gezaehlt wurde - mit Begruendung und Fundstelle.
+    Enthaelt je Datei und Seite den Abgleich mit der Zeile "Summe Funktionen"
+    sowie jede Zeile, die bewusst nicht gezaehlt wurde - mit Begruendung und
+    Fundstelle.
+
+    Verglichen wird je Seite und mit Uebertrag (evidence.seitenabgleich). Der
+    fruehere Abgleich ueber die ganze Datei hat bei mehrseitigen Listen jede
+    Seitensumme aufaddiert und dadurch Abweichungen gemeldet, die es nicht gab.
     """
+    from .evidence import seitenabgleich
+
     records: list[dict] = []
     for document in session.scalars(select(db.Document)):
         columns = {c.idx: c for c in document.columns}
-        eigene: dict[int, float] = {}
-        gemeldet: dict[int, float] = {}
-        for row in document.rows:
-            for value in row.values:
-                if value.count is None:
-                    continue
-                if row.kind == "daten":
-                    eigene[value.column_idx] = eigene.get(value.column_idx, 0.0) + value.count
-                elif row.kind == "summe":
-                    gemeldet[value.column_idx] = gemeldet.get(value.column_idx, 0.0) + value.count
-
-        for column_idx in sorted(set(eigene) | set(gemeldet)):
-            column = columns.get(column_idx)
-            eigener = eigene.get(column_idx, 0.0)
-            listen = gemeldet.get(column_idx)
+        abgleich = seitenabgleich(document)
+        for eintrag in abgleich:
+            column = columns.get(eintrag["spalte_idx"])
+            listen, eigener = eintrag["gemeldet"], eintrag["eigen"]
             records.append({
                 "datei": document.file_name,
-                "schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
+                "schwerpunkt": _schwerpunkt_der_seite(document, eintrag["seite"]),
                 "art": "Summenabgleich",
-                "spalte": column.address if column else str(column_idx),
+                "spalte": column.address if column else str(eintrag["spalte_idx"]),
                 "bezeichnung": column.label if column else "",
-                "seite": "",
-                "zeile": "",
+                "seite": eintrag["seite"] + 1,
+                "zeile": eintrag["zeile"].row_no if eintrag["zeile"] is not None else "",
                 "wert_liste": listen if listen is not None else "",
                 "wert_eigene_zaehlung": eigener,
                 "bewertung": ("nicht in der Liste ausgewiesen" if listen is None
                               else "stimmt überein" if abs(listen - eigener) < 1e-6
                               else "ABWEICHUNG"),
-                "begruendung": "",
+                "begruendung": (f"inkl. Übertrag {eintrag['uebertrag']:g}"
+                                if eintrag["uebertrag"] else ""),
+            })
+        if not abgleich:
+            records.append({
+                "datei": document.file_name,
+                "schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
+                "art": "kein Summenabgleich",
+                "spalte": "", "bezeichnung": "", "seite": "", "zeile": "",
+                "wert_liste": "", "wert_eigene_zaehlung": "",
+                "bewertung": "nicht prüfbar",
+                "begruendung": "Die Liste enthält keine Summenzeile zum Abgleich.",
             })
 
         for row in document.rows:

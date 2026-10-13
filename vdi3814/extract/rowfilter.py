@@ -14,22 +14,42 @@ from ..models import RowKind
 from ..textutil import normalize
 
 # Zeilen, deren Werte bereits an anderer Stelle gezaehlt wurden.
+#
+# Verglichen wird immer WORTWEISE. Ein Teilstring-Vergleich hat echte
+# Datenpunkte verschluckt: "Summenstoerung", "Gesamtstoerung",
+# "Totalausfall", "Waermeuebertrager" oder "Stoerung Uebertragung" sind
+# Datenpunkte, keine Summen- oder Uebertragszeilen.
 SUM_PATTERNS = (
-    "summe", "summen", "zwischensumme", "gesamtsumme", "endsumme",
-    "summe funktionen", "anzahl funktionen", "total", "gesamt",
+    "summe", "summen", "zwischensumme", "gesamtsumme", "endsumme", "teilsumme",
+    "summe funktionen", "anzahl funktionen",
 )
+# "Gesamt"/"Total" sind nur dann eine Summe, wenn danach nichts weiter steht
+# als Summenvokabular, eine Zahl oder eine ASP/ISP-Kennung ("Gesamt",
+# "Gesamt Funktionen", "Total ASP01") - "Gesamt Stoerung" ist ein Datenpunkt.
+_GESAMT_WORTE = ("gesamt", "total")
+_GESAMT_ERLAUBT = {"funktionen", "funktion", "summe", "anzahl", "seite", "blatt",
+                   "liste", "alle", "aller", "der", "je", "dp", "datenpunkte"}
+_KENNUNG_RE = re.compile(r"^(asp|isp)?\d+[a-z]?$")
 CARRY_PATTERNS = (
-    "uebertrag", "ubertrag", "vortrag", "uebertrag von", "uebertrag auf",
-    "seitensumme", "seitenuebertrag", "zwischenuebertrag",
+    "uebertrag", "ubertrag", "vortrag", "seitensumme", "seitenuebertrag",
+    "zwischenuebertrag",
 )
 
 # Beschriftungen des Kopf-/Fussbereichs - sie stehen ausserhalb der Tabelle.
+# Eindeutig: so heisst kein Datenpunkt.
 FOOTER_PATTERNS = (
-    "ausgabedatum", "planersteller", "informationsschwerpunkt", "geprueft",
+    "ausgabedatum", "planersteller", "informationsschwerpunkt",
     "auftraggeber", "planstand", "blatt nr", "msr zeichnung nr", "zeichnungs nr",
-    "datenkommunikationsprotokoll", "aenderungsindex", "index", "revision",
-    "rev", "bearbeiter", "erstellt", "freigabe", "massstab", "plannummer",
-    "anmerkung", "definition der funktionen", "bibbs", "legende",
+    "zeichnungsnummer", "datenkommunikationsprotokoll", "aenderungsindex",
+    "massstab", "plannummer", "definition der funktionen", "bibbs", "legende",
+)
+# Mehrdeutig: "Freigabe Kessel", "Index Sollwert" oder "Erstellt am" koennen
+# Datenpunkte sein. Als Fussbereich gelten diese Woerter nur, wenn die Zeile
+# keine Werte traegt UND die Beschriftung wie ein Feld des Schriftkopfs
+# aussieht: das Wort allein oder mit Doppelpunkt/Punkt ("Freigabe:", "Rev.").
+FOOTER_PATTERNS_MEHRDEUTIG = (
+    "freigabe", "index", "revision", "rev", "erstellt", "bearbeiter", "geprueft",
+    "gezeichnet", "anmerkung", "anmerkungen",
 )
 HEADER_PATTERNS = (
     "benennung", "datenpunkt", "benutzeradresse", "zeile nr", "abschnitt",
@@ -39,7 +59,33 @@ HEADER_PATTERNS = (
 )
 
 # Strassen-/Ortszeilen des Planerstellers ("22941 Bargteheide", "Vosskuhlenweg 2")
-_ADDRESS_RE = re.compile(r"^\s*\d{4,5}\s+[A-Za-zÄÖÜäöüß]")
+_ADDRESS_RE = re.compile(r"^\s*\d{5}\s+[A-Za-zÄÖÜäöüß]")
+
+
+def _beginnt_mit(norm: str, muster: str) -> bool:
+    """True, wenn ``norm`` mit dem Muster als ganzem Wort (bzw. Wortfolge) beginnt."""
+    return norm == muster or norm.startswith(muster + " ")
+
+
+def _enthaelt_wort(norm: str, muster: str) -> bool:
+    return muster in norm.split()
+
+
+def _ist_gesamtzeile(norm: str) -> bool:
+    worte = norm.split()
+    if not worte or worte[0] not in _GESAMT_WORTE:
+        return False
+    return all(wort in _GESAMT_ERLAUBT or _KENNUNG_RE.match(wort) for wort in worte[1:])
+
+
+def _sieht_aus_wie_kopffeld(text: str, muster: str) -> bool:
+    """'Freigabe', 'Freigabe:', 'Rev.', 'Erstellt: 12.03.2024' - aber nicht
+    'Freigabe Kessel' oder 'Index Sollwert'."""
+    roh = (text or "").strip()
+    if normalize(roh) == muster:
+        return True
+    treffer = re.match(r"^\s*([A-Za-zÄÖÜäöüß]+)\s*[:.]", roh)
+    return bool(treffer) and normalize(treffer.group(1)) == muster
 
 
 def classify_label(text: str, *, has_values: bool = False) -> RowKind:
@@ -49,16 +95,22 @@ def classify_label(text: str, *, has_values: bool = False) -> RowKind:
         return RowKind.LEER if not has_values else RowKind.DATEN
 
     for pattern in CARRY_PATTERNS:
-        if norm.startswith(pattern) or f" {pattern}" in norm:
+        if _enthaelt_wort(norm, pattern):
             return RowKind.UEBERTRAG
     for pattern in SUM_PATTERNS:
-        if norm.startswith(pattern):
+        if _beginnt_mit(norm, pattern):
             return RowKind.SUMME
+    if _ist_gesamtzeile(norm):
+        return RowKind.SUMME
     for pattern in FOOTER_PATTERNS:
-        if norm.startswith(pattern):
+        if _beginnt_mit(norm, pattern):
             return RowKind.FUSSBEREICH
-    if _ADDRESS_RE.match(text or ""):
-        return RowKind.FUSSBEREICH
+    if not has_values:
+        for pattern in FOOTER_PATTERNS_MEHRDEUTIG:
+            if _beginnt_mit(norm, pattern) and _sieht_aus_wie_kopffeld(text, pattern):
+                return RowKind.FUSSBEREICH
+        if _ADDRESS_RE.match(text or ""):
+            return RowKind.FUSSBEREICH
     for pattern in HEADER_PATTERNS:
         if norm == pattern:
             return RowKind.KOPF

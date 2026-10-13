@@ -21,6 +21,10 @@ class RowKind(str, Enum):
     UEBERTRAG = "uebertrag"      # Uebertrag von/auf ein anderes Blatt
     FUSSBEREICH = "fussbereich"  # Zeile unterhalb der Tabelle
     KOPF = "kopf"                # wiederholte Kopfzeile
+    # In der Excel-Vorlage ausgeblendet oder durchgestrichen: so werden
+    # entfallene Datenpunkte gekennzeichnet - sie stehen nicht mehr auf der
+    # Liste und werden nicht gezaehlt, bleiben aber im Nachweis sichtbar.
+    ENTFALLEN = "entfallen"
 
 
 class PageKind(str, Enum):

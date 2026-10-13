@@ -132,13 +132,20 @@ def drop_after_footer(rows: list) -> list:
     Rueckfallebene fuer Seiten ohne gezeichneten Tabellenrahmen. Summen- und
     Uebertragszeilen bleiben erhalten - sie werden nicht gezaehlt, dienen aber
     der Kontrolle. Nachlaufende Leerzeilen werden verworfen.
+
+    Eine wiederholte Kopfzeile ("Benennung", "Spalte") beendet die Tabelle
+    dagegen nicht: Listen ueber mehrere Druckseiten wiederholen ihren Kopf,
+    und alles danach sind weiter Datenpunkte. Die Kopfzeile selbst entfaellt.
     """
     from ..models import RowKind
 
     result = []
     for row in rows:
-        if getattr(row, "kind", RowKind.DATEN) in (RowKind.FUSSBEREICH, RowKind.KOPF):
+        art = getattr(row, "kind", RowKind.DATEN)
+        if art is RowKind.FUSSBEREICH:
             break
+        if art is RowKind.KOPF:
+            continue
         result.append(row)
     while result and getattr(result[-1], "kind", None) is RowKind.LEER:
         result.pop()

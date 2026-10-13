@@ -54,6 +54,11 @@ def contains_keyword(haystack: str, needle: str) -> bool:
 
 
 _NUM_RE = re.compile(r"^\s*(\d+(?:[.,]\d+)?)\s*$")
+# Tausenderpunkt nach deutscher Schreibweise: "1.205", "12.480". Funktionen
+# werden immer ganzzahlig gezaehlt - drei Ziffern nach dem Punkt sind deshalb
+# nie Nachkommastellen. Ohne diese Regel wurde "1.205" in einer Summenzeile
+# als 1,205 gelesen.
+_TAUSENDER_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d{3})+)\s*$")
 
 
 def parse_count(value) -> float | None:
@@ -74,7 +79,11 @@ def parse_count(value) -> float | None:
         return None
     if text in {"x", "X", "✓", "✔", "*", "•"}:
         return 1.0
-    m = _NUM_RE.match(text.replace(" ", " "))
+    text = text.replace(" ", " ")
+    tausender = _TAUSENDER_RE.match(text)
+    if tausender:
+        return float(tausender.group(1).replace(".", ""))
+    m = _NUM_RE.match(text)
     if m:
         return float(m.group(1).replace(",", "."))
     return None

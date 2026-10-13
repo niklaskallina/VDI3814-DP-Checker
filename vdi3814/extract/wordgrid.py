@@ -472,6 +472,8 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
     warnings: list[str] = []
     rows: list[DataPointRow] = []
     footer_reached = False
+    spalten = [c for c in grid.columns
+               if c.x_center is not None and c.x_center <= right_limit]
     previous_number: int | None = None
 
     for cluster in _cluster_rows(body_words, tolerance=row_tolerance):
@@ -485,14 +487,35 @@ def extract_table_from_words(words: list[Word], page_width: float, page_index: i
         if parts and _INT_RE.match(parts[0]):
             row_no, label = parts[0], (parts[1] if len(parts) > 1 else "")
 
-        cells: list[Cell] = []
-        for column in grid.columns:
-            if column.x_center is None or column.x_center > right_limit:
+        # Jedes Wort gehoert hoechstens EINER Spalte - der naechstgelegenen.
+        # Zuvor wurde je Spalte gesucht; bei ungleich breiten Spalten konnte
+        # ein Wert so in zwei benachbarte Spalten fallen und doppelt zaehlen.
+        je_spalte: dict[int, list[Word]] = {}
+        for word in cluster:
+            if _cx(word) < grid.label_left:
                 continue
-            hits = [w for w in cluster if abs(_cx(w) - column.x_center) <= tolerance]
+            naechste, abstand = None, float("inf")
+            for column in spalten:
+                distanz = abs(_cx(word) - column.x_center)
+                if distanz < abstand:
+                    naechste, abstand = column, distanz
+            if naechste is None:
+                continue
+            if abstand <= tolerance:
+                je_spalte.setdefault(naechste.index, []).append(word)
+            elif _cx(word) <= right_limit and parse_count(word[4]) is not None:
+                # Eine Zahl im Funktionsbereich, die keiner Spalte zuzuordnen
+                # ist, wuerde sonst still verschwinden.
+                warnings.append(
+                    f"Seite {page_index + 1}: Wert '{word[4]}' in Zeile "
+                    f"'{label[:40] or row_no or '?'}' steht zwischen zwei Spalten "
+                    "und wurde nicht gezaehlt - bitte in der Vorschau pruefen")
+        cells: list[Cell] = []
+        for column in spalten:
+            hits = je_spalte.get(column.index)
             if not hits:
                 continue
-            raw = " ".join(w[4] for w in hits).strip()
+            raw = " ".join(w[4] for w in sorted(hits, key=lambda w: w[0])).strip()
             count = parse_count(raw)
             cells.append(Cell(column_index=column.index, raw_value=raw, count=count,
                               note="" if count is not None else raw,

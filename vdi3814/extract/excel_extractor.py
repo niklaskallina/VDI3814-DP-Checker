@@ -53,11 +53,44 @@ def _cell_text(value) -> str:
     return str(value).strip()
 
 
-def read_grid(path: str | Path) -> list[list[list[str]]]:
+class _Raster(list):
+    """Textraster eines Blatts [zeile][spalte] plus das, was der Text nicht zeigt.
+
+    ``kopien``      Zellen, die nur durch das Ausrollen einer verbundenen Zelle
+                    einen Wert tragen. Im Tabellenkopf ist das gewollt
+                    (Gruppenueberschriften), im Datenbereich wuerde derselbe
+                    Wert sonst mehrfach gezaehlt.
+    ``ausgeblendet`` Zeilen (0-basiert), die in Excel ausgeblendet sind.
+    ``durchgestrichen`` Zeilen, deren Inhalt ueberwiegend durchgestrichen ist.
+    """
+
+    def __init__(self, zeilen=()):
+        super().__init__(zeilen)
+        self.kopien: set[tuple[int, int]] = set()
+        self.ausgeblendet: set[int] = set()
+        self.durchgestrichen: set[int] = set()
+
+
+def _ausrollen(grid: "_Raster", top: int, left: int, bottom: int, right: int) -> None:
+    """Rollt eine verbundene Zelle (0-basiert, Ende exklusiv) ueber ihren Bereich aus."""
+    if top >= len(grid) or left >= len(grid[top]):
+        return
+    value = grid[top][left]
+    if not value:
+        return
+    for r in range(top, min(bottom, len(grid))):
+        for c in range(left, min(right, len(grid[r]))):
+            if not grid[r][c]:
+                grid[r][c] = value
+                grid.kopien.add((r, c))
+
+
+def read_grid(path: str | Path) -> list["_Raster"]:
     """Liest alle Blaetter als Textraster [blatt][zeile][spalte].
 
     Verbundene Zellen werden auf alle beteiligten Zellen ausgerollt, damit
-    Gruppenueberschriften ueber jeder zugehoerigen Spalte stehen.
+    Gruppenueberschriften ueber jeder zugehoerigen Spalte stehen. Welche Zellen
+    dabei nur Kopien sind, haelt das Raster fest (siehe _Raster).
     """
     path = Path(path)
     if path.suffix.lower() == ".xls":
@@ -71,20 +104,15 @@ def read_grid(path: str | Path) -> list[list[list[str]]]:
             book = xlrd.open_workbook(path)
         sheets = []
         for sheet in book.sheets():
-            grid = [
+            grid = _Raster(
                 [_cell_text(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
                 for r in range(sheet.nrows)
-            ]
+            )
             for r0, r1, c0, c1 in getattr(sheet, "merged_cells", []):
-                if r0 >= len(grid) or c0 >= len(grid[r0]):
-                    continue
-                value = grid[r0][c0]
-                if not value:
-                    continue
-                for r in range(r0, min(r1, len(grid))):
-                    for c in range(c0, min(c1, len(grid[r]))):
-                        if not grid[r][c]:
-                            grid[r][c] = value
+                _ausrollen(grid, r0, c0, r1, c1)
+            for r, info in (getattr(sheet, "rowinfo_map", {}) or {}).items():
+                if getattr(info, "hidden", False):
+                    grid.ausgeblendet.add(r)
             sheets.append(grid)
         return sheets
 
@@ -93,21 +121,26 @@ def read_grid(path: str | Path) -> list[list[list[str]]]:
     book = openpyxl.load_workbook(path, data_only=True, read_only=False)
     sheets = []
     for sheet in book.worksheets:
-        grid = [
-            [_cell_text(sheet.cell(r, c).value) for c in range(1, sheet.max_column + 1)]
-            for r in range(1, sheet.max_row + 1)
-        ]
+        grid = _Raster()
+        for r in range(1, sheet.max_row + 1):
+            zeile, belegt, gestrichen = [], 0, 0
+            for c in range(1, sheet.max_column + 1):
+                zelle = sheet.cell(r, c)
+                text = _cell_text(zelle.value)
+                zeile.append(text)
+                if text:
+                    belegt += 1
+                    if zelle.font is not None and zelle.font.strike:
+                        gestrichen += 1
+            grid.append(zeile)
+            if belegt and gestrichen * 2 > belegt:
+                grid.durchgestrichen.add(r - 1)
+            dimension = sheet.row_dimensions.get(r)
+            if dimension is not None and dimension.hidden:
+                grid.ausgeblendet.add(r - 1)
         for merged in sheet.merged_cells.ranges:
-            top, left = merged.min_row - 1, merged.min_col - 1
-            if top >= len(grid) or left >= len(grid[top]):
-                continue
-            value = grid[top][left]
-            if not value:
-                continue
-            for r in range(merged.min_row - 1, min(merged.max_row, len(grid))):
-                for c in range(merged.min_col - 1, min(merged.max_col, len(grid[r]))):
-                    if not grid[r][c]:
-                        grid[r][c] = value
+            _ausrollen(grid, merged.min_row - 1, merged.min_col - 1,
+                       merged.max_row, merged.max_col)
         sheets.append(grid)
     return sheets
 
@@ -241,6 +274,20 @@ def _extract_footnotes(grid: list[list[str]], header_row: int) -> list[Footnote]
     return [footnotes[k] for k in sorted(footnotes, key=lambda m: int(m))]
 
 
+_KOPF_BESCHRIFTUNGEN = {"abschnitt", "spalte", "abschnitt nr", "spalte nr"}
+
+
+def _ist_wiederholter_kopf(left_texts: list[str], cells: list[Cell],
+                           numbers: list[str]) -> bool:
+    """Wiederholung der Nummernzeilen "Abschnitt"/"Spalte" mitten im Blatt."""
+    if any(normalize(text) in _KOPF_BESCHRIFTUNGEN for text in left_texts):
+        return True
+    # Ohne Beschriftung: die Werte sind genau die Spaltennummern des Kopfs
+    werte = {cell.column_index: cell.raw_value.strip() for cell in cells}
+    return (len(werte) >= 4 and len(werte) == len(numbers)
+            and all(werte.get(i) == nummer.strip() for i, nummer in enumerate(numbers)))
+
+
 def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
     section_pos = _find_label(grid, "Abschnitt")
     column_pos = _find_label(grid, "Spalte")
@@ -306,13 +353,21 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
     note_cols = {c for c in column_indices
                  if normalize_address(section_ids[column_of_index[c]]) in {"4", "9"}}
 
+    kopien = getattr(grid, "kopien", set())
+    ausgeblendet = getattr(grid, "ausgeblendet", set())
+    durchgestrichen = getattr(grid, "durchgestrichen", set())
+
+    def wert(r: int, c: int) -> str:
+        # Im Datenbereich zaehlt nur, was wirklich in der Zelle steht - eine
+        # verbundene Zelle ueber zwei Zeilen ist EIN Wert, nicht zwei.
+        return "" if (r, c) in kopien else _value_at(grid, r, c)
+
     rows: list[DataPointRow] = []
     for r in range(column_row + 1, len(grid)):
-        row_values = grid[r]
-        left_texts = [row_values[c] for c in range(0, first_col) if c < len(row_values) and row_values[c]]
+        left_texts = [wert(r, c) for c in range(0, first_col) if wert(r, c)]
         cells: list[Cell] = []
         for c in column_indices:
-            raw = _value_at(grid, r, c)
+            raw = wert(r, c)
             if not raw:
                 continue
             count = parse_count(raw)
@@ -327,19 +382,30 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
         texts = list(left_texts)
         if texts and texts[0].isdigit():
             row_no = texts.pop(0)
-        qualifier = _value_at(grid, r, label_col)
+        qualifier = wert(r, label_col)
         if qualifier in texts:
             texts.remove(qualifier)
-        remark = " ".join(_value_at(grid, r, c) for c in sorted(note_cols)).strip()
+        remark = " ".join(wert(r, c) for c in sorted(note_cols)).strip()
         klartext = " ".join(texts).strip()
 
         has_values = any(cell.count is not None for cell in cells)
         # Nur die Beschriftung bewerten - die Zeilennummer allein macht
         # aus einer leeren Zeile keinen Datenpunkt.
         kind, reason = classify_row(klartext, has_values, remark)
+        if kind is RowKind.DATEN and _ist_wiederholter_kopf(left_texts, cells, numbers):
+            # Wiederholte "Abschnitt"/"Spalte"-Zeile (Liste ueber mehrere
+            # Druckseiten). Die Beschriftung steht in der Qualifikationsspalte
+            # und waere oben schon entfernt - ohne diese Pruefung zaehlten die
+            # Spaltennummern 1, 2, 3 ... als Funktionen eines Datenpunkts.
+            kind, reason = RowKind.KOPF, "Wiederholte Kopfzeile"
         if kind is RowKind.FUSSBEREICH:
             # Unterhalb der Tabelle beginnt der Fussbereich - ab hier nichts mehr
             break
+        if kind is RowKind.DATEN and (r in ausgeblendet or r in durchgestrichen):
+            kind = RowKind.ENTFALLEN
+            reason = ("In Excel ausgeblendete Zeile - entfallener Datenpunkt, wird nicht gezaehlt"
+                      if r in ausgeblendet else
+                      "Durchgestrichene Zeile - entfallener Datenpunkt, wird nicht gezaehlt")
         rows.append(
             DataPointRow(
                 row_no=row_no,
