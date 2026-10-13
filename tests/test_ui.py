@@ -74,6 +74,34 @@ def test_oberflaeche_mit_gespeicherten_daten(eigene_ablage, samples):
     assert "Funktionen gesamt" in beschriftungen
 
 
+def test_oberflaeche_zeigt_abgelegte_kostenschaetzungen(eigene_ablage, samples):
+    """Reiter 5 mit einem abgelegten Stand: Liste, Auswahl und Positionen.
+
+    Dieser Zweig wird erst sichtbar, wenn im Projekt schon eine
+    Kostenschaetzung liegt - ohne Test liefe er nie mit.
+    """
+    from sqlalchemy.orm import Session
+
+    from vdi3814 import db, projects
+
+    projekt = projects.resolve(None)
+    engine = db.make_engine(projekt.db_path)
+    with Session(engine) as session:
+        db.save_document(session, process_file(samples["alt"]))
+        db.save_cost_estimate(session, "Angebot", [
+            {"spalte_adresse": "1.1", "gruppe": "Ein-/Ausgabefunktionen", "spalte": "BI",
+             "spalte_key": "A_1_1", "menge": 10.0, "einheitspreis": 45.0},
+        ], bemerkung="Erstkalkulation")
+
+    at = _app()
+    at.run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+
+    texte = " ".join(str(d.value.to_dict()) for d in at.dataframe if hasattr(d.value, "to_dict"))
+    assert "Angebot" in texte
+    assert "Erstkalkulation" in texte
+
+
 # --------------------------------------------------------------------------
 # Reiter 2: ganze Zeilen loeschen
 # --------------------------------------------------------------------------
@@ -216,3 +244,20 @@ def test_korrekturtabelle_traegt_den_schwerpunkt_mit(samples):
     assert erste.schwerpunkt == "ASP07"
     assert erste.schwerpunkt_text == "Kaeltetechnik"
     assert result_to_frame(ergebnis).loc[0, "Schwerpunkt"].startswith("ASP07")
+
+
+def test_alle_ui_module_sind_in_der_exe_enthalten():
+    """app.py wird nur als Skript mitgeliefert - was es aus vdi3814.ui importiert,
+    findet PyInstaller nicht von selbst und muss in vdi3814.spec stehen.
+    Sonst startet die installierte Version nicht."""
+    import re
+
+    wurzel = Path(APP).resolve().parents[2]
+    quelle = Path(APP).read_text(encoding="utf-8")
+    module = set(re.findall(r"from vdi3814\.ui\.(\w+) import", quelle))
+    module |= {name.strip() for zeile in re.findall(r"from vdi3814\.ui import ([\w, ]+)", quelle)
+               for name in zeile.split(",")}
+    spec = (wurzel / "vdi3814.spec").read_text(encoding="utf-8")
+    fehlend = sorted(m for m in module if f'"vdi3814.ui.{m}"' not in spec)
+    assert module, "app.py muss UI-Module importieren"
+    assert not fehlend, f"in vdi3814.spec fehlen: {fehlend}"

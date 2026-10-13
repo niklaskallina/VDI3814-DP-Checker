@@ -1,0 +1,8 @@
+# Gilt beim Start aus dem Projektordner (streamlit run vdi3814/ui/app.py).
+# Die installierte Programmversion setzt dieselben Werte im launcher.py.
+[theme]
+# Ruhiges Blau statt Signalrot als Akzent - Rot bleibt Fehlern vorbehalten
+primaryColor = "#2a78d6"
+
+[browser]
+gatherUsageStats = false

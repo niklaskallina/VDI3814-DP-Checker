@@ -234,6 +234,10 @@ def _lies_ziffer(zelle, mindest_konfidenz: float = 30.0) -> str:
       listen der haeufigste, ihn zu verlieren waere der groesste Fehler.
     * Fuer die uebrigen Ziffern ist "--psm 8" (ein Wort) der richtige Modus;
       "--psm 10" (ein Zeichen) liefert bei diesen Groessen oft gar nichts.
+    * Viele Listen markieren eine Funktion mit einem Kreuz statt einer Zahl.
+      Die Ziffernerkennung findet darin nichts - ohne zweiten Durchgang ging
+      jedes Kreuz still verloren. Findet sich keine Ziffer, wird deshalb
+      gezielt nach einem Kreuz gefragt; es zaehlt wie eine 1.
     """
     import pytesseract
 
@@ -253,14 +257,33 @@ def _lies_ziffer(zelle, mindest_konfidenz: float = 30.0) -> str:
     bild = Image.fromarray(leinwand)
     bild = bild.resize((bild.width * 6, bild.height * 6), Image.LANCZOS)
 
+    bester, beste_konfidenz = _bester_treffer(
+        bild, "0123456789", lambda text: text.isdigit() and len(text) <= 3)
+    if beste_konfidenz >= mindest_konfidenz:
+        return bester
+
+    # Keine Ziffer: ist es ein Kreuz? Nur bei annaehernd quadratischer Tinte -
+    # ein Kreuz ist etwa so breit wie hoch.
+    if 0.6 <= breite / hoehe <= 1.6:
+        kreuz, konfidenz = _bester_treffer(
+            bild, "xX", lambda text: 1 <= len(text) <= 2 and set(text) <= {"x", "X"})
+        if kreuz and konfidenz >= 50.0:
+            return "x"
+    return ""
+
+
+def _bester_treffer(bild, zeichen: str, gueltig) -> tuple[str, float]:
+    """Sicherster Treffer der Texterkennung, beschraenkt auf ``zeichen``."""
+    import pytesseract
+
     daten = pytesseract.image_to_data(
-        bild, config="--psm 8 -c tessedit_char_whitelist=0123456789",
+        bild, config=f"--psm 8 -c tessedit_char_whitelist={zeichen}",
         output_type=pytesseract.Output.DICT,
     )
     bester, beste_konfidenz = "", -1.0
     for index, text in enumerate(daten["text"]):
         text = (text or "").strip()
-        if not text or not text.isdigit() or len(text) > 3:
+        if not text or not gueltig(text):
             continue
         try:
             konfidenz = float(daten["conf"][index])
@@ -268,7 +291,7 @@ def _lies_ziffer(zelle, mindest_konfidenz: float = 30.0) -> str:
             konfidenz = -1.0
         if konfidenz > beste_konfidenz:
             bester, beste_konfidenz = text, konfidenz
-    return bester if beste_konfidenz >= mindest_konfidenz else ""
+    return bester, beste_konfidenz
 
 
 _LABEL_MUELL = re.compile(r"[|\\\[\]{}_~^`]+")

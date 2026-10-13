@@ -25,6 +25,7 @@ from vdi3814.config import SETTINGS                                     # noqa: 
 from vdi3814.costs import apply_prices, price_template, total_cost      # noqa: E402
 from vdi3814.pipeline import process_file, validate_sums                # noqa: E402
 from vdi3814.profiles_loader import get_profile, load_profiles                       # noqa: E402
+from vdi3814.ui import auswertung                                        # noqa: E402
 from vdi3814.ui.table import (DELETE_FIELD, frame_to_result, marked_rows,  # noqa: E402
                               result_to_frame)
 from vdi3814.vision import ocr                                          # noqa: E402
@@ -46,6 +47,25 @@ def get_engine(path: str):
 def state() -> dict:
     st.session_state.setdefault("results", {})
     return st.session_state
+
+
+def ist_dunkel() -> bool:
+    """Laeuft die Oberflaeche im dunklen Farbschema? Diagramme werden dafuer
+    eigens gestuft, nicht einfach invertiert."""
+    try:
+        return getattr(st.context.theme, "type", None) == "dark"
+    except Exception:                                   # pragma: no cover - aeltere Versionen
+        return False
+
+
+def zeige_diagramm(diagramm) -> None:
+    if diagramm is None:
+        st.caption("Keine Werte für dieses Diagramm.")
+        return
+    try:
+        st.altair_chart(diagramm, width="stretch", theme=None)
+    except TypeError:                                   # pragma: no cover - aeltere Versionen
+        st.altair_chart(diagramm, use_container_width=True, theme=None)
 
 
 def zahl(wert: float, nachkomma: int = 2) -> str:
@@ -99,7 +119,7 @@ def load_raw() -> pd.DataFrame:
 
 tab_import, tab_preview, tab_check, tab_overview, tab_costs, tab_export, tab_data = st.tabs(
     ["1 · Import", "2 · Prüfen & korrigieren", "3 · Nachweis & Differenzen",
-     "4 · Gesamtübersicht", "5 · Kostenschätzung", "6 · Export", "7 · Projekt & Daten"]
+     "4 · Auswertung", "5 · Kostenschätzung", "6 · Export", "7 · Projekt & Daten"]
 )
 
 
@@ -282,8 +302,10 @@ with tab_preview:
         with knopf_speichern:
             if st.button("In Datenbank speichern", type="primary", key=f"save_{name}"):
                 with Session(engine) as session:
-                    dokument = db.save_document(session, ergebnis)
-                st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument.id}).")
+                    # Die Nummer noch innerhalb der Sitzung ablesen - danach
+                    # ist der Datensatz von der Datenbank getrennt.
+                    dokument_id = db.save_document(session, ergebnis).id
+                st.success(f"Gespeichert in Projekt „{projektname}“ (Dokument {dokument_id}).")
         st.caption("Gelöschte Zeilen wirken sich erst nach dem Speichern auf Übersicht, "
                    "Kosten und Export aus. Ein erneuter Import der Datei stellt den "
                    "ursprünglichen Stand wieder her.")
@@ -364,103 +386,172 @@ with tab_check:
 # --------------------------------------------------------------------------
 
 with tab_overview:
-    st.subheader(f"Gesamtübersicht – Projekt „{projektname}“")
+    dunkel = ist_dunkel()
     raw = load_raw()
     if raw.empty:
-        st.info("Noch keine Daten gespeichert.")
+        st.subheader(f"Auswertung – Projekt „{projektname}“")
+        st.info("Noch keine Daten gespeichert – zuerst in Reiter 1 importieren.")
     else:
+        kopf_links, kopf_rechts = st.columns([3, 1])
+        with kopf_links:
+            st.subheader(f"Auswertung – Projekt „{projektname}“")
+        with kopf_rechts:
+            stand = pd.to_datetime(raw["importiert_am"]).max()
+            st.caption(f"Stand der Daten: {stand:%d.%m.%Y %H:%M}" if pd.notna(stand) else "")
+
+        # --- Filter: eine Zeile ueber allen Diagrammen -------------------
         filter_spalten = st.columns(5)
-        with filter_spalten[0]:
-            fassung = st.multiselect("Fassung", sorted(raw["fassung"].unique()))
-        with filter_spalten[1]:
-            projekt_filter = st.multiselect("Projektangabe", sorted(raw["projekt"].fillna("").unique()))
-        with filter_spalten[2]:
-            anlage = st.multiselect("Anlage", sorted(raw["anlage"].fillna("").unique()))
-        with filter_spalten[3]:
-            schwerpunkt_filter = st.multiselect(
-                "Schwerpunkt (ASP/ISP)", sorted(raw["schwerpunkt"].fillna("").unique()))
-        with filter_spalten[4]:
-            gewerk = st.multiselect("Gewerk", sorted(raw["gewerk"].fillna("").unique()))
+        auswahl_filter = {}
+        for spalte_ui, (feld, titel) in zip(filter_spalten, (
+                ("fassung", "Fassung"), ("projekt", "Projektangabe"), ("anlage", "Anlage"),
+                ("schwerpunkt", "Schwerpunkt (ASP/ISP)"), ("gewerk", "Gewerk"))):
+            with spalte_ui:
+                auswahl_filter[feld] = st.multiselect(
+                    titel, sorted(raw[feld].fillna("").astype(str).unique()),
+                    placeholder="alle", key=f"auswertung_{feld}")
         gefiltert = raw
-        for spalte, werte in (("fassung", fassung), ("projekt", projekt_filter),
-                              ("anlage", anlage), ("schwerpunkt", schwerpunkt_filter),
-                              ("gewerk", gewerk)):
+        for feld, werte in auswahl_filter.items():
             if werte:
-                gefiltert = gefiltert[gefiltert[spalte].isin(werte)]
+                gefiltert = gefiltert[gefiltert[feld].fillna("").astype(str).isin(werte)]
+        if gefiltert.empty:
+            # Kein st.stop(): das wuerde auch die folgenden Reiter abbrechen.
+            st.warning("Für diese Filter gibt es keine Daten.")
+        else:
+            dokument_ids = {int(i) for i in gefiltert["dokument_id"].unique()}
 
-        kennzahlen = st.columns(5)
-        kennzahlen[0].metric("Dateien", gefiltert["dokument_id"].nunique())
-        kennzahlen[1].metric("Datenpunkte", gefiltert["zeile_id"].nunique())
-        kennzahlen[2].metric("Funktionen gesamt", f"{gefiltert['wert'].sum():g}")
-        kennzahlen[3].metric(
-            "Schwerpunkte (ASP/ISP)",
-            gefiltert.loc[gefiltert["schwerpunkt"] != schwerpunkt.OHNE_ZUORDNUNG,
-                          "schwerpunkt"].nunique())
-        kennzahlen[4].metric("Belegte Funktionsspalten", gefiltert["spalte_key"].nunique())
+            with Session(engine) as session:
+                preise_auswertung = db.get_unit_prices(session)
+                pruefung = auswertung.qualitaet(session, gefiltert, dokument_ids)
 
-        # Zuordnung zu den Automations-/Informationsschwerpunkten: welcher ASP
-        # traegt wie viele Datenpunkte und Funktionen?
-        st.markdown("**Datenpunkte und Funktionen je Schwerpunkt (ASP/ISP)**")
-        st.caption("Grundlage ist die Angabe im Kopf-/Fußbereich der Liste bzw. in der "
-                   "Zeile selbst – nachtragen lässt sie sich in Reiter 2.")
-        st.dataframe(aggregate.schwerpunkt_summary(gefiltert).rename(columns={
-            "schwerpunkt": "Schwerpunkt", "bezeichnung": "Bezeichnung", "art": "Art",
-            "datenpunkte": "Datenpunkte", "menge": "Funktionen",
-            "dokumente": "Dateien", "dateien": "Dateinamen",
-        }), width="stretch", hide_index=True)
+            # --- Kennzahlen und Qualitaet ------------------------------------
+            st.html(auswertung.kacheln_html(auswertung.kennzahlen(gefiltert, preise_auswertung),
+                                            SETTINGS.currency, dunkel))
+            st.html(auswertung.qualitaet_html(pruefung.befunde(), dunkel))
 
-        # Kernansicht: das VDI-Blatt mit einer Zeile je Datei - genau so wird
-        # es auch exportiert.
-        st.markdown("**GA-Funktionsliste – Mengen je Datei und Funktionsspalte**")
-        st.caption("Eine Zeile je importierter Liste, unten die Gesamtsumme. "
-                   "Spaltentitel: Abschnitt.Spalte · Bezeichnung — genauso im Excel-Export.")
-        with Session(engine) as session:
-            for profil in aggregate.profiles_in_use(session):
-                matrix = aggregate.datei_spalten_matrix(session, profil)
-                if matrix.empty:
-                    continue
-                profile = get_profile(profil)
-                anzeige = matrix.copy()
-                titel = {c.key: f"{c.address} · {c.label}" for c in profile.columns}
-                belegt = [c.key for c in profile.columns if float(anzeige[c.key].sum()) != 0.0]
-                anzeige["Funktionen gesamt"] = anzeige[[c.key for c in profile.columns]].sum(axis=1)
-                spalten = ["Datei", "Projekt", "Anlage", "Datenpunkte", "Funktionen gesamt"] + belegt
-                anzeige = anzeige[spalten].rename(columns=titel)
-                summenzeile = {spalte: "" for spalte in anzeige.columns}
-                summenzeile["Datei"] = "Summe Funktionen"
-                for spalte in anzeige.columns[3:]:
-                    summenzeile[spalte] = anzeige[spalte].sum()
-                anzeige = pd.concat([anzeige, pd.DataFrame([summenzeile])], ignore_index=True)
-                if len(aggregate.profiles_in_use(session)) > 1:
-                    st.markdown(f"*Fassung {profile.fassung}*")
-                st.dataframe(anzeige, width="stretch", hide_index=True)
-                st.caption(f"Nur belegte Spalten angezeigt ({len(belegt)} von "
-                           f"{len(profile.columns)}); der Export enthält alle.")
+            # --- Diagramme -----------------------------------------------------
+            links, rechts = st.columns(2, gap="large")
+            with links:
+                st.html(auswertung.titel_html(
+                    "Funktionen je Funktionsgruppe", "Wofür die Funktionen gebraucht werden", dunkel))
+                zeige_diagramm(auswertung.diagramm_gruppen(gefiltert, dunkel))
+            with rechts:
+                st.html(auswertung.titel_html(
+                    "Funktionen je Schwerpunkt", "Aufteilung auf die Automations-/"
+                    "Informationsschwerpunkte – nachtragen in Reiter 2", dunkel))
+                zeige_diagramm(auswertung.diagramm_schwerpunkte(gefiltert, dunkel))
 
-                sp_matrix = aggregate.schwerpunkt_matrix(session, profil)
-                if not sp_matrix.empty:
-                    st.markdown("**Dieselbe Aufstellung je Schwerpunkt (ASP/ISP)**")
+            zusammenfassung = aggregate.column_summary(gefiltert)
+            raster = auswertung.diagramm_raster(gefiltert, dunkel)
+            if raster is not None:
+                links, rechts = st.columns(2, gap="large")
+            else:
+                links = rechts = st.container()
+            with links:
+                st.html(auswertung.titel_html(
+                    "Meistbelegte Funktionsspalten", "Die zwölf Spalten mit den meisten "
+                    "Funktionen – sie bestimmen die Kosten", dunkel))
+                zeige_diagramm(auswertung.diagramm_spalten(zusammenfassung, dunkel=dunkel))
+            if raster is not None:
+                with rechts:
+                    st.html(auswertung.titel_html(
+                        "Mengen je Datei und Funktionsgruppe",
+                        auswertung.raster_untertitel(dunkel), dunkel))
+                    zeige_diagramm(raster)
+
+            # --- Tabellen ------------------------------------------------------
+            st.html(auswertung.titel_html("Tabellen", "Alle Zahlen zum Nachlesen, Sortieren "
+                                          "und Filtern – genauso im Excel-Export", dunkel))
+            reiter_dateien, reiter_sp, reiter_spalten, reiter_auf, reiter_einzel = st.tabs(
+                ["GA-Funktionsliste je Datei", "Je Schwerpunkt", "Summen je Spalte",
+                 "Aufschlüsselung", "Einzelwerte"])
+            schluessel_gefiltert = {f"D{i}" for i in dokument_ids}
+            with Session(engine) as session:
+                profile_im_einsatz = aggregate.profiles_in_use(session)
+                matrizen = {p: aggregate.datei_spalten_matrix(session, p) for p in profile_im_einsatz}
+                sp_matrizen = {p: aggregate.schwerpunkt_matrix(session, p) for p in profile_im_einsatz}
+
+            with reiter_dateien:
+                st.caption("Eine Zeile je importierter Liste, unten die Gesamtsumme. "
+                           "Spaltentitel: Abschnitt.Spalte · Bezeichnung.")
+                for profil, matrix in matrizen.items():
+                    if matrix.empty:
+                        continue
+                    matrix = matrix[matrix[aggregate.SCHLUESSEL_SPALTE].isin(schluessel_gefiltert)]
+                    if matrix.empty:
+                        continue
+                    profile = get_profile(profil)
+                    titel = {c.key: f"{c.address} · {c.label}" for c in profile.columns}
+                    belegt = [c.key for c in profile.columns if float(matrix[c.key].sum()) != 0.0]
+                    anzeige = matrix.copy()
+                    anzeige["Funktionen gesamt"] = anzeige[[c.key for c in profile.columns]].sum(axis=1)
+                    spalten = ["Datei", "Projekt", "Anlage", "Datenpunkte", "Funktionen gesamt"] + belegt
+                    anzeige = anzeige[spalten].rename(columns=titel)
+                    summenzeile = {spalte: "" for spalte in anzeige.columns}
+                    summenzeile["Datei"] = "Summe Funktionen"
+                    for spalte in anzeige.columns[3:]:
+                        summenzeile[spalte] = anzeige[spalte].sum()
+                    anzeige = pd.concat([anzeige, pd.DataFrame([summenzeile])], ignore_index=True)
+                    if len(matrizen) > 1:
+                        st.markdown(f"**Fassung {profile.fassung}**")
+                    st.dataframe(anzeige, width="stretch", hide_index=True)
+                    st.caption(f"Nur belegte Spalten angezeigt ({len(belegt)} von "
+                               f"{len(profile.columns)}); der Export enthält alle.")
+
+            with reiter_sp:
+                st.dataframe(aggregate.schwerpunkt_summary(gefiltert).rename(columns={
+                    "schwerpunkt": "Schwerpunkt", "bezeichnung": "Bezeichnung", "art": "Art",
+                    "datenpunkte": "Datenpunkte", "menge": "Funktionen",
+                    "dokumente": "Dateien", "dateien": "Dateinamen",
+                }), width="stretch", hide_index=True)
+                for profil, sp_matrix in sp_matrizen.items():
+                    if sp_matrix.empty:
+                        continue
+                    sp_matrix = sp_matrix[sp_matrix[aggregate.SCHLUESSEL_SPALTE]
+                                          .isin(schluessel_gefiltert)]
+                    if auswahl_filter["schwerpunkt"]:
+                        sp_matrix = sp_matrix[sp_matrix["Schwerpunkt"].isin(auswahl_filter["schwerpunkt"])]
+                    if sp_matrix.empty:
+                        continue
+                    profile = get_profile(profil)
+                    titel = {c.key: f"{c.address} · {c.label}" for c in profile.columns}
+                    belegt = [c.key for c in profile.columns if float(sp_matrix[c.key].sum()) != 0.0]
                     sp_anzeige = sp_matrix.copy()
                     sp_anzeige["Funktionen gesamt"] = sp_anzeige[
                         [c.key for c in profile.columns]].sum(axis=1)
-                    sp_spalten = ["Schwerpunkt", "Bezeichnung", "Datei", "Datenpunkte",
-                                  "Funktionen gesamt"] + belegt
-                    st.dataframe(sp_anzeige[sp_spalten].rename(columns=titel),
+                    st.markdown(f"**Im Aufbau der VDI-Liste{' – Fassung ' + profile.fassung if len(sp_matrizen) > 1 else ''}**")
+                    st.dataframe(sp_anzeige[["Schwerpunkt", "Bezeichnung", "Datei", "Datenpunkte",
+                                             "Funktionen gesamt"] + belegt].rename(columns=titel),
                                  width="stretch", hide_index=True)
 
-        st.markdown("**Summen je Funktionsspalte**")
-        st.dataframe(aggregate.column_summary(gefiltert), width="stretch", hide_index=True)
-        links, rechts = st.columns(2)
-        with links:
-            st.markdown("**Je Spaltengruppe**")
-            st.dataframe(aggregate.group_summary(gefiltert), width="stretch", hide_index=True)
-        with rechts:
-            dimension = st.selectbox("Aufschlüsselung nach",
-                                     ["schwerpunkt", "projekt", "anlage", "gewerk", "datei"])
-            st.dataframe(aggregate.by_dimension(gefiltert, dimension),
-                         width="stretch", hide_index=True)
-        with st.expander("Drilldown auf jede einzelne Zelle"):
-            st.dataframe(gefiltert, width="stretch", hide_index=True)
+            with reiter_spalten:
+                st.dataframe(zusammenfassung.rename(columns={
+                    "profil": "Profil", "spalte_adresse": "Abschnitt.Spalte",
+                    "spalte_key": "Schlüssel", "gruppe": "Gruppe", "untergruppe": "Untergruppe",
+                    "spalte": "Funktionsspalte", "menge": "Funktionen", "dokumente": "Dateien",
+                    "datenpunkte": "Datenpunkte"}),
+                    width="stretch", hide_index=True)
+
+            with reiter_auf:
+                links, rechts = st.columns(2)
+                with links:
+                    st.markdown("**Je Funktionsgruppe**")
+                    st.dataframe(aggregate.group_summary(gefiltert).rename(columns={
+                        "fassung": "Fassung", "gruppe": "Gruppe", "menge": "Funktionen"}),
+                        width="stretch", hide_index=True)
+                with rechts:
+                    dimension = st.selectbox(
+                        "Aufschlüsselung nach", ["schwerpunkt", "projekt", "anlage", "gewerk", "datei"],
+                        format_func=lambda d: {"schwerpunkt": "Schwerpunkt (ASP/ISP)",
+                                               "projekt": "Projektangabe", "anlage": "Anlage",
+                                               "gewerk": "Gewerk", "datei": "Datei"}[d])
+                    st.dataframe(aggregate.by_dimension(gefiltert, dimension).rename(columns={
+                        "menge": "Funktionen", "datenpunkte": "Datenpunkte",
+                        "dokumente": "Dateien"}), width="stretch", hide_index=True)
+
+            with reiter_einzel:
+                st.caption("Jede gezählte Zelle mit Datei, Seite und Zeile – die Grundlage "
+                           "aller Summen.")
+                st.dataframe(gefiltert, width="stretch", hide_index=True)
 
 
 # --------------------------------------------------------------------------
@@ -470,12 +561,18 @@ with tab_overview:
 with tab_costs:
     st.subheader("Kostenschätzung")
     st.write("Einheitspreis je Funktionsspalte eintragen – die Kosten werden sofort neu "
-             "berechnet. Gespeicherte Preise gelten auch für den Excel-Export.")
+             "berechnet. Gespeicherte Preise gelten auch für den Excel-Export. "
+             "Ganze Stände lassen sich weiter unten unter einem Namen im Projekt "
+             "ablegen und später wieder aufrufen.")
 
     raw = load_raw()
     with Session(engine) as session:
         gespeicherte_preise = db.get_unit_prices(session)
+        abgelegte = db.list_cost_estimates(session)
     summary = aggregate.column_summary(raw)
+    # Nach dem Laden eines Standes bekommt der Preis-Editor einen neuen
+    # Schluessel - sonst zeigte er weiter die alten Eingaben an.
+    preis_fassung = state().setdefault("preis_fassung", 0)
 
     alle_spalten = st.checkbox("Alle Spalten des Profils anzeigen (auch ohne Mengen)",
                                value=summary.empty)
@@ -498,7 +595,7 @@ with tab_costs:
     if basis is not None:
         bearbeitet = st.data_editor(
             basis, width="stretch", hide_index=True, num_rows="fixed", height=420,
-            key="preis_editor",
+            key=f"preis_editor_{preis_fassung}",
             column_config={
                 "spalte_adresse": st.column_config.TextColumn("Abschnitt.Spalte"),
                 "gruppe": st.column_config.TextColumn("Gruppe"),
@@ -536,6 +633,81 @@ with tab_costs:
                 db.set_unit_prices(session, eingegeben)
             st.success("Einheitspreise gespeichert.")
 
+        # ------------------------------------------------------------------
+        # Ganze Staende im Projekt ablegen
+        # ------------------------------------------------------------------
+        st.divider()
+        st.markdown("**Kostenschätzung im Projekt ablegen**")
+        st.caption("Speichert Mengen, Einheitspreise und Kosten dieser Tabelle unter "
+                   "einem Namen in der Projektdatenbank – etwa „Angebot“ oder "
+                   "„Nachtrag 1“. Ein gleicher Name überschreibt den bisherigen Stand. "
+                   "Beim Laden werden die Einheitspreise wieder eingesetzt; die Mengen "
+                   "kommen immer aus den aktuell importierten Listen.")
+
+        with st.form("kostenschaetzung_ablegen", clear_on_submit=True):
+            name_spalte, bemerkung_spalte = st.columns([1, 2])
+            with name_spalte:
+                stand_name = st.text_input(
+                    "Name", placeholder=f"z. B. Angebot {pd.Timestamp.now():%d.%m.%Y}")
+            with bemerkung_spalte:
+                stand_bemerkung = st.text_input("Bemerkung (freiwillig)", placeholder="")
+            if st.form_submit_button("Kostenschätzung speichern", type="primary"):
+                positionen = bearbeitet.to_dict("records")
+                with Session(engine) as session:
+                    db.save_cost_estimate(session, stand_name, positionen,
+                                          currency=SETTINGS.currency,
+                                          bemerkung=stand_bemerkung)
+                st.success("Kostenschätzung im Projekt abgelegt.")
+                st.rerun()
+
+        if not abgelegte:
+            st.caption("Noch keine Kostenschätzung abgelegt.")
+        else:
+            st.dataframe(pd.DataFrame([
+                {"Name": e["name"], "Positionen": e["positionen"],
+                 "Funktionen": e["menge_gesamt"],
+                 f"Kosten [{e['waehrung']}]": e["kosten_gesamt"],
+                 "Bemerkung": e["bemerkung"],
+                 "Gespeichert am": e["gespeichert_am"].strftime("%d.%m.%Y %H:%M")
+                 if e["gespeichert_am"] else ""}
+                for e in abgelegte
+            ]), width="stretch", hide_index=True)
+
+            namen = {f"{e['name']} ({e['gespeichert_am']:%d.%m.%Y %H:%M})": e["id"]
+                     for e in abgelegte}
+            auswahl = st.selectbox("Abgelegten Stand auswählen", list(namen.keys()),
+                                   key="kostenstand_auswahl")
+            stand_id = namen[auswahl]
+            laden, loeschen, _ = st.columns([1, 1, 2])
+            with laden:
+                if st.button("Preise übernehmen", key="kostenstand_laden",
+                             help="Setzt die Einheitspreise dieses Standes wieder ein – "
+                                  "auch für den Excel-Export."):
+                    with Session(engine) as session:
+                        stand = db.load_cost_estimate(session, stand_id)
+                        if stand:
+                            db.set_unit_prices(session, {
+                                position["spalte_key"]: position["einheitspreis"]
+                                for position in stand["positionen"]
+                                if position["spalte_key"]})
+                    state()["preis_fassung"] = preis_fassung + 1
+                    st.toast("Einheitspreise aus dem abgelegten Stand übernommen.")
+                    st.rerun()
+            with loeschen:
+                if st.button("Stand löschen", key="kostenstand_loeschen"):
+                    with Session(engine) as session:
+                        db.delete_cost_estimate(session, stand_id)
+                    st.rerun()
+
+            with st.expander("Positionen des ausgewählten Standes"):
+                with Session(engine) as session:
+                    stand = db.load_cost_estimate(session, stand_id)
+                if stand:
+                    st.caption(f"{stand['name']} – Funktionen {zahl(stand['menge_gesamt'], 0)}, "
+                               f"Kosten {zahl(stand['kosten_gesamt'])} {stand['waehrung']}")
+                    st.dataframe(pd.DataFrame(stand["positionen"]),
+                                 width="stretch", hide_index=True)
+
 
 # --------------------------------------------------------------------------
 # 6 - Export
@@ -545,12 +717,21 @@ with tab_export:
     st.subheader("Excel-Export")
     st.write("Der Export enthält die Funktionsliste im Original-Layout, die Summen je "
              "Funktionsspalte, ein Kostenblatt mit Formeln sowie alle Rohdaten mit "
-             "Quellenangabe.")
+             "Quellenangabe. Jedes Blatt rechnet mit Formeln: Mengen, Datenpunkte, "
+             "Summen und Kosten hängen an den Zeilen der „GA-Funktionsliste“ und "
+             "rechnen dort sofort mit, wenn Zeilen gelöscht oder ergänzt werden.")
     raw = load_raw()
     if raw.empty:
         st.info("Noch keine Daten gespeichert.")
     else:
         ziel = st.text_input("Zieldatei", value=str(projekt.path / f"{projekt.path.name}_Auswertung.xlsx"))
+        ausblenden = st.checkbox(
+            "Nebenblätter ausblenden", value=True,
+            help="Sichtbar bleiben Übersicht, Schwerpunkte, Mengen je Schwerpunkt, "
+                 "GA-Funktionsliste, Kostenschätzung und Prüfung. Ausgeblendet werden "
+                 + ", ".join(export_excel.NEBENBLAETTER)
+                 + " – sie bleiben in der Datei und rechnen mit; in Excel per "
+                   "Rechtsklick auf einen Blattreiter → „Einblenden“ wieder sichtbar.")
         if st.button("Excel erzeugen", type="primary"):
             with Session(engine) as session:
                 pfad = export_excel.export_workbook(
@@ -569,6 +750,7 @@ with tab_export:
                     schwerpunkte=aggregate.schwerpunkt_summary(raw),
                     schwerpunkt_matrizen={profil: aggregate.schwerpunkt_matrix(session, profil)
                                           for profil in aggregate.profiles_in_use(session)},
+                    nebenblaetter_ausblenden=ausblenden,
                 )
             st.success(f"Geschrieben: {pfad}")
             st.download_button("Datei herunterladen", data=Path(pfad).read_bytes(),

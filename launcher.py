@@ -73,6 +73,8 @@ def run_ui() -> int:
         "--server.headless=true",
         "--browser.gatherUsageStats=false",
         "--global.developmentMode=false",
+        # Ruhiges Blau statt Signalrot als Akzent - Rot bleibt Fehlern vorbehalten
+        "--theme.primaryColor=#2a78d6",
     ]
     return int(streamlit_cli.main() or 0)
 

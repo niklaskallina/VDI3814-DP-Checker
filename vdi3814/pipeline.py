@@ -38,8 +38,10 @@ from .models import (
     RowKind,
     SumCheck,
 )
-from .profiles_loader import Profile, assign_footnotes, detect_profile, enrich_columns, match_columns
+from .profiles_loader import (Profile, assign_footnotes, detect_profile, enrich_columns,
+                              match_columns, profile_by_addresses)
 from . import schwerpunkt as schwerpunkte
+from .textutil import normalize, similarity
 from .vision import ocr
 
 log = logging.getLogger(__name__)
@@ -383,6 +385,18 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
         profile, score, all_scores = detect_profile(texts)
 
     if profile is None:
+        # Zu wenig Kopftext fuer die Schlagworte: die Spaltenadressen sind je
+        # Fassung verschieden und verraten sie ebenfalls.
+        profile, anteil = profile_by_addresses(
+            c.address for table in tables for c in table.columns)
+        if profile is not None:
+            score = anteil
+            result.warnings.append(
+                f"VDI-Fassung '{profile.fassung}' aus den Spaltenadressen bestimmt "
+                f"({anteil:.0%} der Adressen bekannt) - der Tabellenkopf enthielt "
+                "zu wenig Text fuer die übliche Erkennung.")
+
+    if profile is None:
         result.warnings.append(
             "VDI-Fassung konnte nicht sicher bestimmt werden "
             f"(Bewertung: {', '.join(f'{k}={v:.1f}' for k, v in all_scores.items())}). "
@@ -399,6 +413,8 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
     result.footnotes = footnotes
     result.metadata = metadata
     assign_footnotes(result.columns, result.footnotes)
+    if profile is not None:
+        _pruefe_spaltenbezeichnungen(result, profile)
     _ordne_schwerpunkte(result, tables)
     result.sum_checks = validate_sums(result)
 
@@ -436,6 +452,33 @@ def process_file(path: str | Path, backend=None, settings=SETTINGS,
             "Einzelheiten im Reiter 'Nachweis & Differenzen'."
         )
     return result
+
+
+def _pruefe_spaltenbezeichnungen(result: DocumentResult, profile: Profile) -> None:
+    """Gleicht die gelesenen Spaltenueberschriften mit der Vorlage ab.
+
+    Zugeordnet wird ueber die Spaltenadresse - sie ist verlaesslicher als der
+    oft gedrehte, eng gesetzte Kopftext. Passt die gelesene Ueberschrift
+    ueberhaupt nicht zur Vorlage, ist sie verrutscht oder falsch gelesen. Dann
+    gilt die Bezeichnung der Vorlage: sonst stuende in Kostenschaetzung und
+    Export unter der richtigen Spalte der Name der Nachbarspalte.
+    """
+    ersetzt: list[str] = []
+    for column in result.columns:
+        vorlage = profile.column(column.column_key) if column.column_key else None
+        if vorlage is None or not column.label or len(normalize(column.label)) < 4:
+            continue
+        passung = max((similarity(column.label, kandidat)
+                       for kandidat in vorlage.candidates() if kandidat), default=0.0)
+        if passung < 0.5:
+            ersetzt.append(f"{column.address or vorlage.address} "
+                           f"('{column.label[:30]}' -> '{vorlage.label}')")
+            column.label = vorlage.label
+    if ersetzt:
+        result.warnings.append(
+            f"{len(ersetzt)} Spaltenueberschrift(en) passten nicht zur Vorlage und "
+            "wurden durch die Bezeichnung laut Vorlage ersetzt (Zuordnung ueber die "
+            "Spaltenadresse): " + ", ".join(ersetzt[:4]) + (" ..." if len(ersetzt) > 4 else ""))
 
 
 def _ordne_schwerpunkte(result: DocumentResult, tables: list[RawTable]) -> None:

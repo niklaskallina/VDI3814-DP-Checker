@@ -58,61 +58,104 @@ def _schwerpunkt_der_seite(document: db.Document, page_index: int) -> str:
     return ""
 
 
+def seitenabgleich(document: db.Document) -> list[dict]:
+    """Summenzeile gegen eigene Zaehlung - je Seite und Funktionsspalte.
+
+    Dieselbe Regel wie beim Import (pipeline.validate_sums), hier fuer einen
+    gespeicherten Datensatz:
+
+    * verglichen wird je SEITE - Plansaetze tragen je Blatt eine Summenzeile,
+      ein Vergleich ueber die ganze Datei wuerde jede Seitensumme mehrfach
+      zaehlen;
+    * ein Uebertrag gehoert zur erwarteten Seitensumme: die Summenzeile einer
+      Folgeseite enthaelt Uebertrag + eigene Zeilen;
+    * reine Summenblaetter (nur Summen, keine eigenen Datenzeilen) fassen einen
+      anderen Umfang zusammen und werden nicht geprueft.
+
+    Rueckgabe: je Seite und Spalte ein dict mit ``seite`` (0-basiert),
+    ``spalte_idx``, ``gemeldet`` (Wert der Summenzeile oder None), ``eigen``
+    (Datenzeilen + Uebertrag), ``uebertrag`` und ``zeile`` (die Summenzeile).
+    """
+    seiten: dict[int, dict[str, dict]] = {}
+    for row in document.rows:
+        eintrag = seiten.setdefault(row.page_index, {
+            "eigen": {}, "gemeldet": {}, "uebertrag": {}, "zeile": {}})
+        if row.kind == "daten":
+            ziel = eintrag["eigen"]
+        elif row.kind == "summe":
+            ziel = eintrag["gemeldet"]
+        elif row.kind == "uebertrag":
+            ziel = eintrag["uebertrag"]
+        else:
+            continue
+        for value in row.values:
+            if value.count is None:
+                continue
+            ziel[value.column_idx] = ziel.get(value.column_idx, 0.0) + value.count
+            if row.kind == "summe":
+                eintrag["zeile"].setdefault(value.column_idx, row)
+
+    ergebnis: list[dict] = []
+    for page_index in sorted(seiten):
+        eintrag = seiten[page_index]
+        if not eintrag["eigen"] or not eintrag["gemeldet"]:
+            continue          # Seite ohne Summenzeile oder reines Summenblatt
+        for column_idx in sorted(set(eintrag["eigen"]) | set(eintrag["gemeldet"])):
+            uebertrag = eintrag["uebertrag"].get(column_idx, 0.0)
+            ergebnis.append({
+                "seite": page_index,
+                "spalte_idx": column_idx,
+                "gemeldet": eintrag["gemeldet"].get(column_idx),
+                "eigen": eintrag["eigen"].get(column_idx, 0.0) + uebertrag,
+                "uebertrag": uebertrag,
+                "zeile": eintrag["zeile"].get(column_idx),
+            })
+    return ergebnis
+
+
+def _stimmt(eintrag: dict) -> bool:
+    return eintrag["gemeldet"] is None or abs(eintrag["gemeldet"] - eintrag["eigen"]) < 1e-6
+
+
 def findings_for_document(document: db.Document) -> list[Finding]:
     """Alle pruefwuerdigen Punkte eines importierten Dokuments."""
     befunde: list[Finding] = []
     columns = {c.idx: c for c in document.columns}
 
-    # 1. Abweichung zwischen eigener Summe und der Summenzeile - je Seite.
-    #    Ein dokumentweiter Vergleich waere falsch: Plansaetze enthalten oft ein
-    #    eigenes Summenblatt mit Summen je Anlage. Das fasst einen anderen
-    #    Umfang zusammen (teils Anlagen aus anderen Dateien) und wuerde in
-    #    jeder Spalte eine scheinbare Abweichung erzeugen.
-    seiten: dict[int, dict[str, dict]] = {}
-    for row in document.rows:
-        eintrag = seiten.setdefault(row.page_index, {"eigen": {}, "gemeldet": {}, "zeile": {}})
-        for value in row.values:
-            if value.count is None:
-                continue
-            if row.kind == "daten":
-                eintrag["eigen"][value.column_idx] = (
-                    eintrag["eigen"].get(value.column_idx, 0.0) + value.count)
-            elif row.kind == "summe":
-                eintrag["gemeldet"][value.column_idx] = (
-                    eintrag["gemeldet"].get(value.column_idx, 0.0) + value.count)
-                eintrag["zeile"].setdefault(value.column_idx, row)
-
-    for page_index in sorted(seiten):
-        eigen = seiten[page_index]["eigen"]
-        gemeldet = seiten[page_index]["gemeldet"]
-        if not eigen or not gemeldet:
-            continue          # Seite ohne Summenzeile oder reines Summenblatt
-        for column_idx, wert in gemeldet.items():
-            eigener_wert = eigen.get(column_idx, 0.0)
-            if abs(wert - eigener_wert) < 1e-6:
-                continue
-            column = columns.get(column_idx)
-            zeile = seiten[page_index]["zeile"].get(column_idx)
-            bbox = db.bbox_from_text(zeile.bbox) if zeile else None
-            befunde.append(Finding(
-                art="abweichung",
-                titel=f"Seite {page_index + 1}, Spalte "
-                      f"{column.address if column else column_idx}: "
-                      f"Liste {wert:g}, eigene Zaehlung {eigener_wert:g}",
-                erklaerung=(
-                    "Die Summenzeile dieser Seite weicht von der Summe der Einzelzeilen "
-                    "derselben Seite ab. Haeufigste Ursachen: die Liste wurde nach dem "
-                    "Ausfuellen geaendert, eine Zeile wurde uebersehen, oder ein Wert "
-                    "steht zwischen zwei Spalten. Die Markierung zeigt die Summenzeile."
-                ),
-                dokument_id=document.id,
-                datei=document.file_name,
-                seite=zeile.page_index if zeile else page_index,
-                bbox=bbox,
-                spalte=column.label if column else "",
-                schwerpunkt=_schwerpunkt_der_seite(document, page_index),
-                werte={"Liste": wert, "eigene Zaehlung": eigener_wert},
-            ))
+    # 1. Abweichung zwischen eigener Summe und der Summenzeile - je Seite,
+    #    mit Uebertrag (siehe seitenabgleich).
+    abgleich = seitenabgleich(document)
+    abweichende_seiten = {e["seite"] for e in abgleich if not _stimmt(e)}
+    for eintrag in abgleich:
+        if _stimmt(eintrag):
+            continue
+        wert, eigener_wert = eintrag["gemeldet"], eintrag["eigen"]
+        column = columns.get(eintrag["spalte_idx"])
+        zeile = eintrag["zeile"]
+        bbox = db.bbox_from_text(zeile.bbox) if zeile else None
+        werte = {"Liste": wert, "eigene Zaehlung": eigener_wert}
+        if eintrag["uebertrag"]:
+            werte["davon Uebertrag"] = eintrag["uebertrag"]
+        befunde.append(Finding(
+            art="abweichung",
+            titel=f"Seite {eintrag['seite'] + 1}, Spalte "
+                  f"{column.address if column else eintrag['spalte_idx']}: "
+                  f"Liste {wert:g}, eigene Zaehlung {eigener_wert:g}",
+            erklaerung=(
+                "Die Summenzeile dieser Seite weicht von der Summe der Einzelzeilen "
+                "derselben Seite (zuzueglich eines Uebertrags) ab. Haeufigste "
+                "Ursachen: die Liste wurde nach dem Ausfuellen geaendert, eine Zeile "
+                "wurde uebersehen, oder ein Wert steht zwischen zwei Spalten. Die "
+                "Markierung zeigt die Summenzeile."
+            ),
+            dokument_id=document.id,
+            datei=document.file_name,
+            seite=zeile.page_index if zeile else eintrag["seite"],
+            bbox=bbox,
+            spalte=column.label if column else "",
+            schwerpunkt=_schwerpunkt_der_seite(document, eintrag["seite"]),
+            werte=werte,
+        ))
 
     # 2. Nicht gezaehlte Zeilen mit Werten - hier lohnt der Blick am meisten.
     #    Eine Summenzeile, die zur eigenen Zaehlung passt, ist dagegen normal
@@ -121,15 +164,10 @@ def findings_for_document(document: db.Document) -> list[Finding]:
         if row.kind in ("daten", "leer"):
             continue
         if row.kind == "summe":
-            # Eine Summenzeile, die zur eigenen Zaehlung derselben Seite passt,
-            # ist normal und wird nicht gemeldet.
-            seite = seiten.get(row.page_index, {"eigen": {}, "gemeldet": {}})
-            eigen_seite, gemeldet_seite = seite["eigen"], seite["gemeldet"]
-            stimmt = eigen_seite and all(
-                abs(gemeldet_seite.get(idx, 0.0) - eigen_seite.get(idx, 0.0)) < 1e-6
-                for idx in gemeldet_seite
-            )
-            if stimmt:
+            # Eine Summenzeile, die zur eigenen Zaehlung derselben Seite passt
+            # (Uebertrag eingerechnet), ist normal und wird nicht gemeldet.
+            geprueft = any(e["seite"] == row.page_index for e in abgleich)
+            if geprueft and row.page_index not in abweichende_seiten:
                 continue
         werte = [v for v in row.values if v.count is not None]
         if not werte:

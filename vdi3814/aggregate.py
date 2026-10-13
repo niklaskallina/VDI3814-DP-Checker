@@ -44,6 +44,7 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
     records: list[dict] = []
     for document in session.scalars(select(db.Document)):
         columns = {c.idx: c for c in document.columns}
+        profile = get_profile(document.profile_id) if document.profile_id else None
         for row in document.rows:
             # Nur echte Datenpunkte: keine Summen-, Uebertrags-, Leer-,
             # Kopf- oder Fussbereichszeilen.
@@ -53,6 +54,10 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
                 column = columns.get(value.column_idx)
                 if column is None or column.is_note:
                     continue
+                # Bezeichnungen einheitlich aus dem Profil: dieselbe Spalte
+                # heisst in jeder Datei gleich, egal wie der Kopf gelesen wurde.
+                vorlage = (profile.column(column.column_key)
+                           if profile is not None and column.column_key else None)
                 records.append({
                     "dokument_id": document.id,
                     "datei": document.file_name,
@@ -73,11 +78,12 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
                     "bas": row.bas,
                     "qualifikation": row.qualifier,
                     "bemerkung": row.remark,
-                    "spalte_adresse": column.address or _column_address(column.column_key),
+                    "spalte_adresse": ((vorlage.address if vorlage else "") or column.address
+                                       or _column_address(column.column_key)),
                     "spalte_key": column.column_key,
-                    "gruppe": column.group_name,
-                    "untergruppe": column.subgroup,
-                    "spalte": column.label,
+                    "gruppe": (vorlage.group if vorlage else "") or column.group_name,
+                    "untergruppe": (vorlage.subgroup if vorlage else "") or column.subgroup,
+                    "spalte": (vorlage.label if vorlage else "") or column.label,
                     "wert": value.count if value.count is not None else 0.0,
                     "rohwert": value.raw_value,
                     "notiz": value.note,
@@ -95,25 +101,100 @@ def _profile_order(profile_id: str) -> dict[str, int]:
 
 
 def column_summary(frame: pd.DataFrame) -> pd.DataFrame:
-    """Summen je Funktionsspalte ueber alle importierten Listen."""
+    """Summen je Funktionsspalte ueber alle importierten Listen.
+
+    Eine Zeile je Spalte des Profils - zusammengefasst ueber den
+    Spaltenschluessel, nicht ueber die gelesene Beschriftung. Liest eine Datei
+    die Ueberschrift etwas anders (OCR, Umbruch, Gruppenzeile), entstand
+    frueher eine zweite Zeile fuer dieselbe Spalte; im Excel-Export verwiesen
+    dann beide auf dieselbe Summe und Menge wie Kosten zaehlten doppelt.
+    Bezeichnungen kommen deshalb aus dem Profil. Spalten ohne Zuordnung
+    bleiben je Adresse und Beschriftung getrennt.
+
+    "datenpunkte" zaehlt die Datenpunkte (Zeilen) mit einem Wert in der Spalte.
+    """
+    spalten = ["profil", "spalte_adresse", "spalte_key", "gruppe", "untergruppe", "spalte",
+               "menge", "dokumente", "datenpunkte"]
     if frame.empty:
-        return pd.DataFrame(columns=["profil", "spalte_adresse", "spalte_key", "gruppe",
-                                     "untergruppe", "spalte", "menge", "dokumente", "datenpunkte"])
+        return pd.DataFrame(columns=spalten)
+    daten = frame.copy()
+    schluessel = daten["spalte_key"].fillna("").astype(str)
+    daten["_gruppe"] = [
+        key if key else f"?{adresse}|{spalte}"
+        for key, adresse, spalte in zip(schluessel, daten["spalte_adresse"].fillna(""),
+                                        daten["spalte"].fillna(""))
+    ]
+    daten["_belegt"] = daten["zeile_id"].where(daten["wert"].fillna(0) != 0)
     grouped = (
-        frame.groupby(["profil", "spalte_adresse", "spalte_key", "gruppe", "untergruppe", "spalte"],
-                      dropna=False)
-        .agg(menge=("wert", "sum"),
+        daten.groupby(["profil", "_gruppe"], dropna=False)
+        .agg(spalte_key=("spalte_key", "first"),
+             spalte_adresse=("spalte_adresse", "first"),
+             gruppe=("gruppe", "first"),
+             untergruppe=("untergruppe", "first"),
+             spalte=("spalte", "first"),
+             menge=("wert", "sum"),
              dokumente=("dokument_id", "nunique"),
-             datenpunkte=("datenpunkt", "count"))
+             datenpunkte=("_belegt", "nunique"))
         .reset_index()
     )
+    # Einheitliche Bezeichnungen aus dem Profil
+    for index, record in grouped.iterrows():
+        profile = get_profile(str(record["profil"])) if record["profil"] else None
+        eintrag = profile.column(str(record["spalte_key"])) if profile and record["spalte_key"] else None
+        if eintrag is None:
+            continue
+        grouped.at[index, "spalte_adresse"] = eintrag.address or record["spalte_adresse"]
+        grouped.at[index, "gruppe"] = eintrag.group or record["gruppe"]
+        grouped.at[index, "untergruppe"] = eintrag.subgroup or record["untergruppe"]
+        grouped.at[index, "spalte"] = eintrag.label or record["spalte"]
+
     orders = {profil: _profile_order(profil) for profil in grouped["profil"].unique()}
     grouped["_sort"] = [
         orders.get(profil, {}).get(key, 9999)
         for profil, key in zip(grouped["profil"], grouped["spalte_key"])
     ]
-    grouped = grouped.sort_values(["profil", "_sort", "spalte_adresse"]).drop(columns="_sort")
-    return grouped.reset_index(drop=True)
+    grouped = grouped.sort_values(["profil", "_sort", "spalte_adresse"])
+    return grouped[spalten].reset_index(drop=True)
+
+
+def moegliche_dubletten(frame: pd.DataFrame, mindestanteil: float = 0.8) -> pd.DataFrame:
+    """Dateien, die (fast) dieselben Datenpunkte enthalten.
+
+    Derselbe Plansatz liegt oft doppelt vor - als PDF und als Excel, oder in
+    zwei Planstaenden. Der Dateivergleich ueber den Hash erkennt das nicht,
+    die Mengen zaehlten dann doppelt. Verglichen wird deshalb der Inhalt: je
+    Datenpunkt Benennung und belegte Werte. Stimmen mindestens
+    ``mindestanteil`` der Datenpunkte der kleineren Datei ueberein, wird das
+    Paar gemeldet - entscheiden muss der Anwender.
+    """
+    spalten = ["datei_a", "datei_b", "dokument_a", "dokument_b", "gemeinsam", "anteil"]
+    if frame.empty:
+        return pd.DataFrame(columns=spalten)
+    from .textutil import normalize
+
+    signaturen: dict[int, set] = {}
+    dateien: dict[int, str] = {}
+    belegt = frame[frame["wert"].fillna(0) != 0]
+    for (dokument_id, _zeile), gruppe in belegt.groupby(["dokument_id", "zeile_id"]):
+        werte = frozenset(zip(gruppe["spalte_key"], gruppe["wert"]))
+        name = normalize(str(gruppe["datenpunkt"].iloc[0] or ""))
+        signaturen.setdefault(int(dokument_id), set()).add((name, werte))
+        dateien[int(dokument_id)] = str(gruppe["datei"].iloc[0])
+
+    paare: list[dict] = []
+    nummern = sorted(signaturen)
+    for position, a in enumerate(nummern):
+        for b in nummern[position + 1:]:
+            kleiner = min(len(signaturen[a]), len(signaturen[b]))
+            if kleiner < 3:
+                continue
+            gemeinsam = len(signaturen[a] & signaturen[b])
+            anteil = gemeinsam / kleiner
+            if anteil >= mindestanteil:
+                paare.append({"datei_a": dateien[a], "datei_b": dateien[b],
+                              "dokument_a": a, "dokument_b": b,
+                              "gemeinsam": gemeinsam, "anteil": round(anteil, 3)})
+    return pd.DataFrame(paare, columns=spalten)
 
 
 def group_summary(frame: pd.DataFrame) -> pd.DataFrame:
@@ -183,6 +264,13 @@ def pivot_projects(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.pivot_table(frame, index=["projekt", "anlage"], columns="gruppe",
                           values="wert", aggfunc="sum", fill_value=0, margins=True,
                           margins_name="Gesamt").reset_index()
+
+
+def _schwerpunkt_der_seite(document: db.Document, page_index: int) -> str:
+    for page in document.pages:
+        if page.page_index == page_index and page.schwerpunkt:
+            return page.schwerpunkt
+    return ""
 
 
 def _schwerpunkte_der_datei(document: db.Document) -> list[str]:
@@ -318,41 +406,48 @@ def profiles_in_use(session: Session) -> list[str]:
 def pruefbericht(session: Session) -> pd.DataFrame:
     """Nachvollziehbare Dokumentation der Zaehlung.
 
-    Enthaelt je Datei den Abgleich mit der Zeile "Summe Funktionen" sowie jede
-    Zeile, die bewusst nicht gezaehlt wurde - mit Begruendung und Fundstelle.
+    Enthaelt je Datei und Seite den Abgleich mit der Zeile "Summe Funktionen"
+    sowie jede Zeile, die bewusst nicht gezaehlt wurde - mit Begruendung und
+    Fundstelle.
+
+    Verglichen wird je Seite und mit Uebertrag (evidence.seitenabgleich). Der
+    fruehere Abgleich ueber die ganze Datei hat bei mehrseitigen Listen jede
+    Seitensumme aufaddiert und dadurch Abweichungen gemeldet, die es nicht gab.
     """
+    from .evidence import seitenabgleich
+
     records: list[dict] = []
     for document in session.scalars(select(db.Document)):
         columns = {c.idx: c for c in document.columns}
-        eigene: dict[int, float] = {}
-        gemeldet: dict[int, float] = {}
-        for row in document.rows:
-            for value in row.values:
-                if value.count is None:
-                    continue
-                if row.kind == "daten":
-                    eigene[value.column_idx] = eigene.get(value.column_idx, 0.0) + value.count
-                elif row.kind == "summe":
-                    gemeldet[value.column_idx] = gemeldet.get(value.column_idx, 0.0) + value.count
-
-        for column_idx in sorted(set(eigene) | set(gemeldet)):
-            column = columns.get(column_idx)
-            eigener = eigene.get(column_idx, 0.0)
-            listen = gemeldet.get(column_idx)
+        abgleich = seitenabgleich(document)
+        for eintrag in abgleich:
+            column = columns.get(eintrag["spalte_idx"])
+            listen, eigener = eintrag["gemeldet"], eintrag["eigen"]
             records.append({
                 "datei": document.file_name,
-                "schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
+                "schwerpunkt": _schwerpunkt_der_seite(document, eintrag["seite"]),
                 "art": "Summenabgleich",
-                "spalte": column.address if column else str(column_idx),
+                "spalte": column.address if column else str(eintrag["spalte_idx"]),
                 "bezeichnung": column.label if column else "",
-                "seite": "",
-                "zeile": "",
+                "seite": eintrag["seite"] + 1,
+                "zeile": eintrag["zeile"].row_no if eintrag["zeile"] is not None else "",
                 "wert_liste": listen if listen is not None else "",
                 "wert_eigene_zaehlung": eigener,
                 "bewertung": ("nicht in der Liste ausgewiesen" if listen is None
                               else "stimmt überein" if abs(listen - eigener) < 1e-6
                               else "ABWEICHUNG"),
-                "begruendung": "",
+                "begruendung": (f"inkl. Übertrag {eintrag['uebertrag']:g}"
+                                if eintrag["uebertrag"] else ""),
+            })
+        if not abgleich:
+            records.append({
+                "datei": document.file_name,
+                "schwerpunkt": ", ".join(_schwerpunkte_der_datei(document)),
+                "art": "kein Summenabgleich",
+                "spalte": "", "bezeichnung": "", "seite": "", "zeile": "",
+                "wert_liste": "", "wert_eigene_zaehlung": "",
+                "bewertung": "nicht prüfbar",
+                "begruendung": "Die Liste enthält keine Summenzeile zum Abgleich.",
             })
 
         for row in document.rows:
@@ -414,6 +509,9 @@ def schwerpunkt_matrix(session: Session, profile_id: str) -> pd.DataFrame:
                     "Projekt": document.projekt or document.auftraggeber,
                     "Anlage": document.anlage,
                     "Datenpunkte": 0,
+                    # Aus welcher Liste stammt die Zeile? Der Excel-Export
+                    # zieht darueber genau deren Zeilen zusammen.
+                    SCHLUESSEL_SPALTE: dokument_schluessel(document),
                 }
                 for column in profile.columns:
                     record[column.key] = 0.0
@@ -431,7 +529,8 @@ def schwerpunkt_matrix(session: Session, profile_id: str) -> pd.DataFrame:
                     record[column.column_key] += value.count
         records.extend(je_schwerpunkt.values())
 
-    frame = pd.DataFrame(records, columns=kopf + [c.key for c in profile.columns])
+    frame = pd.DataFrame(
+        records, columns=kopf + [c.key for c in profile.columns] + [SCHLUESSEL_SPALTE])
     if frame.empty:
         return frame
     # Nach Kennung sortieren, Zeilen ohne Zuordnung ans Ende
