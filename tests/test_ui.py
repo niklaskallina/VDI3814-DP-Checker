@@ -244,3 +244,20 @@ def test_korrekturtabelle_traegt_den_schwerpunkt_mit(samples):
     assert erste.schwerpunkt == "ASP07"
     assert erste.schwerpunkt_text == "Kaeltetechnik"
     assert result_to_frame(ergebnis).loc[0, "Schwerpunkt"].startswith("ASP07")
+
+
+def test_alle_ui_module_sind_in_der_exe_enthalten():
+    """app.py wird nur als Skript mitgeliefert - was es aus vdi3814.ui importiert,
+    findet PyInstaller nicht von selbst und muss in vdi3814.spec stehen.
+    Sonst startet die installierte Version nicht."""
+    import re
+
+    wurzel = Path(APP).resolve().parents[2]
+    quelle = Path(APP).read_text(encoding="utf-8")
+    module = set(re.findall(r"from vdi3814\.ui\.(\w+) import", quelle))
+    module |= {name.strip() for zeile in re.findall(r"from vdi3814\.ui import ([\w, ]+)", quelle)
+               for name in zeile.split(",")}
+    spec = (wurzel / "vdi3814.spec").read_text(encoding="utf-8")
+    fehlend = sorted(m for m in module if f'"vdi3814.ui.{m}"' not in spec)
+    assert module, "app.py muss UI-Module importieren"
+    assert not fehlend, f"in vdi3814.spec fehlen: {fehlend}"

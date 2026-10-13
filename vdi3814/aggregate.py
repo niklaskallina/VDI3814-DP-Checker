@@ -157,6 +157,46 @@ def column_summary(frame: pd.DataFrame) -> pd.DataFrame:
     return grouped[spalten].reset_index(drop=True)
 
 
+def moegliche_dubletten(frame: pd.DataFrame, mindestanteil: float = 0.8) -> pd.DataFrame:
+    """Dateien, die (fast) dieselben Datenpunkte enthalten.
+
+    Derselbe Plansatz liegt oft doppelt vor - als PDF und als Excel, oder in
+    zwei Planstaenden. Der Dateivergleich ueber den Hash erkennt das nicht,
+    die Mengen zaehlten dann doppelt. Verglichen wird deshalb der Inhalt: je
+    Datenpunkt Benennung und belegte Werte. Stimmen mindestens
+    ``mindestanteil`` der Datenpunkte der kleineren Datei ueberein, wird das
+    Paar gemeldet - entscheiden muss der Anwender.
+    """
+    spalten = ["datei_a", "datei_b", "dokument_a", "dokument_b", "gemeinsam", "anteil"]
+    if frame.empty:
+        return pd.DataFrame(columns=spalten)
+    from .textutil import normalize
+
+    signaturen: dict[int, set] = {}
+    dateien: dict[int, str] = {}
+    belegt = frame[frame["wert"].fillna(0) != 0]
+    for (dokument_id, _zeile), gruppe in belegt.groupby(["dokument_id", "zeile_id"]):
+        werte = frozenset(zip(gruppe["spalte_key"], gruppe["wert"]))
+        name = normalize(str(gruppe["datenpunkt"].iloc[0] or ""))
+        signaturen.setdefault(int(dokument_id), set()).add((name, werte))
+        dateien[int(dokument_id)] = str(gruppe["datei"].iloc[0])
+
+    paare: list[dict] = []
+    nummern = sorted(signaturen)
+    for position, a in enumerate(nummern):
+        for b in nummern[position + 1:]:
+            kleiner = min(len(signaturen[a]), len(signaturen[b]))
+            if kleiner < 3:
+                continue
+            gemeinsam = len(signaturen[a] & signaturen[b])
+            anteil = gemeinsam / kleiner
+            if anteil >= mindestanteil:
+                paare.append({"datei_a": dateien[a], "datei_b": dateien[b],
+                              "dokument_a": a, "dokument_b": b,
+                              "gemeinsam": gemeinsam, "anteil": round(anteil, 3)})
+    return pd.DataFrame(paare, columns=spalten)
+
+
 def group_summary(frame: pd.DataFrame) -> pd.DataFrame:
     """Summen je Spaltengruppe (Ein-/Ausgabe, Verarbeitung, ...)."""
     if frame.empty:

@@ -36,7 +36,7 @@ entpackt sie und startet `VDI3814-DP-Checker.exe`.
 | **1 Import** | Dateien auswählen (mehrere gleichzeitig) und einlesen |
 | **2 Prüfen & korrigieren** | Erkanntes Ergebnis ansehen, Werte bei Bedarf ändern, einzelne oder mehrere ganze Zeilen löschen, speichern |
 | **3 Nachweis & Differenzen** | Jeden Befund anklicken – die Originalseite wird an der betreffenden Stelle markiert angezeigt |
-| **4 Gesamtübersicht** | Summen über alle Listen, nach Schwerpunkt (ASP/ISP), Projekt/Anlage/Gewerk aufschlüsselbar |
+| **4 Auswertung** | Kennzahlen auf einen Blick, Qualitätsampel (Summenprüfung, nicht gezählte Werte, doppelt importierte Listen), Diagramme je Funktionsgruppe, Schwerpunkt, Spalte und Datei; alle Tabellen filterbar nach Fassung, Projekt, Anlage, ASP/ISP und Gewerk |
 | **5 Kostenschätzung** | Einheitspreis je Funktionsspalte eintragen, Kosten rechnen sofort mit; ganze Stände lassen sich unter einem Namen im Projekt ablegen und später wieder aufrufen |
 | **6 Export** | Excel-Datei mit Funktionsliste, Summen, Kostenblatt und Rohdaten |
 | **7 Projekt & Daten** | Projekte anlegen/löschen, einzelne Dateien aus der Datenbank entfernen |
@@ -56,6 +56,10 @@ anlegen, leeren oder vollständig löschen, ebenso einzelne importierte Dateien.
 | Alte **und** neue Fassung | automatische Erkennung, keine Abfrage nötig |
 | Regelschemata in derselben Datei | werden erkannt, übersprungen und protokolliert |
 | Summen-, Zwischensummen- und **Übertragszeilen** | werden erkannt und **nie mitgezählt**, bleiben aber zur Kontrolle sichtbar |
+| Datenpunkte, die wie Summen klingen | „Summenstörung“, „Gesamtstörung“, „Freigabe Kessel“, „Revisionsschalter“, „Wärmeübertrager“ … bleiben Datenpunkte – verglichen wird wortweise, nicht nach Wortanfang |
+| Entfallene Datenpunkte (Excel) | ausgeblendete und durchgestrichene Zeilen werden nicht gezählt, aber im Nachweis aufgeführt |
+| Kreuze statt Zahlen | ein „x“ zählt wie eine 1 – auch in gescannten Listen |
+| Doppelt importierte Listen | derselbe Plansatz als PDF **und** Excel wird am Inhalt erkannt und in der Auswertung gemeldet |
 | Leerzeilen und Fußbereich | zählen nicht mit; der Datenbereich wird aus den Tabellenlinien hart begrenzt |
 | Freitext in Zellen | wird als Anmerkung geführt, nie als Zahl addiert |
 | **Automations-/Informationsschwerpunkt** | ASP/ISP wird aus Kopf-/Fußbereich, Anlagenangabe oder der Zeile selbst gelesen; jede Auswertung weist aus, wie viele Datenpunkte und Funktionen auf welchen ASP bzw. ISP entfallen |
@@ -238,7 +242,7 @@ den Erkennungskern zu ändern**:
 2. Unter `detection.keywords` die Begriffe eintragen, die nur in diesem Layout vorkommen.
 3. Unter `columns` die Spalten mit `address` (`Abschnitt.Spalte`), `label` und
    `aliases` pflegen. `aggregate_group` bestimmt, wie die Spalte in der
-   Gesamtübersicht zusammengefasst wird.
+   Auswertung zusammengefasst wird.
 4. Fertig – das Profil wird beim nächsten Start automatisch geladen
    (`python -m vdi3814.cli profile`).
 

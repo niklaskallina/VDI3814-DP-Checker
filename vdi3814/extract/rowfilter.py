@@ -184,7 +184,11 @@ def markiere_unbeschriftete_summenzeilen(rows: list) -> list:
             # Sie wird nie gezaehlt; eine Abweichung meldet stattdessen die
             # Summenpruefung. Das verhindert, dass eine unsauber gelesene
             # Summenzeile die Menge still verdoppelt.
-            if passt or (am_ende and gezaehlte_zeilen >= 2):
+            # Aber nur, wenn sie wie eine Summe AUSSIEHT: Werte in den meisten
+            # bisher belegten Spalten. Ein letzter Datenpunkt, dessen Name im
+            # Scan nicht lesbar war, traegt nur wenige Werte - er bleibt drin.
+            if passt or (am_ende and gezaehlte_zeilen >= 2
+                         and _sieht_aus_wie_summe(werte, laufend)):
                 row.kind = RowKind.SUMME
                 row.exclusion_reason = (
                     "Summenzeile ohne Beschriftung erkannt: die Werte entsprechen "
@@ -210,3 +214,18 @@ def _entspricht_summe(werte: dict[int, float], laufend: dict[int, float]) -> boo
     if set(werte) != set(belegte):
         return False
     return all(abs(werte[index] - belegte[index]) < 1e-6 for index in belegte)
+
+
+def _sieht_aus_wie_summe(werte: dict[int, float], laufend: dict[int, float]) -> bool:
+    """Deckt die Zeile die meisten belegten Spalten ab, ohne darunter zu liegen?"""
+    belegte = {index for index, wert in laufend.items() if wert}
+    if not belegte:
+        return False
+    abgedeckt = belegte & set(werte)
+    if len(abgedeckt) < 0.6 * len(belegte):
+        return False
+    # Eine Summe ist nie kleiner als ein einzelner Summand der Spalte; liegt
+    # die Zeile ueberwiegend UNTER den bisherigen Spaltensummen, ist sie eher
+    # ein Datenpunkt.
+    darunter = sum(1 for index in abgedeckt if werte[index] < laufend[index] * 0.5)
+    return darunter <= len(abgedeckt) // 3

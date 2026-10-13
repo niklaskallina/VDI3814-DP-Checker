@@ -398,3 +398,57 @@ def test_spalte_erscheint_nur_einmal_auch_bei_abweichender_beschriftung(tmp_path
 
     vorlage = {c.group for c in get_profile("vdi3814_alt").columns}
     assert set(aggregate.group_summary(roh)["gruppe"]) <= vorlage
+
+
+def _zeile(text, werte):
+    from vdi3814.models import Cell
+
+    return DataPointRow(klartext=text, cells=[Cell(column_index=i, raw_value=str(w), count=w)
+                                              for i, w in werte.items()])
+
+
+def test_letzter_datenpunkt_ohne_lesbaren_namen_bleibt_gezaehlt():
+    """Im Scan ist der Name der letzten Zeile unlesbar - sie ist trotzdem ein
+    Datenpunkt und keine Summenzeile."""
+    from vdi3814.extract.rowfilter import markiere_unbeschriftete_summenzeilen
+
+    zeilen = [_zeile("Pumpe", {0: 1, 1: 1}), _zeile("Ventil", {2: 1, 3: 1}),
+              _zeile("Klappe", {4: 1, 5: 1}), _zeile("", {1: 1})]
+    markiere_unbeschriftete_summenzeilen(zeilen)
+    assert zeilen[-1].kind is RowKind.DATEN
+
+
+def test_unbeschriftete_summenzeile_wird_weiter_erkannt():
+    from vdi3814.extract.rowfilter import markiere_unbeschriftete_summenzeilen
+
+    zeilen = [_zeile("Pumpe", {0: 1, 1: 1}), _zeile("Ventil", {0: 1, 2: 1}),
+              _zeile("Klappe", {1: 2, 2: 1}), _zeile("", {0: 2, 1: 3, 2: 3})]
+    markiere_unbeschriftete_summenzeilen(zeilen)
+    assert zeilen[-1].kind is RowKind.SUMME
+    # auch, wenn ein Wert falsch gelesen wurde (3 statt 2)
+    zeilen = [_zeile("Pumpe", {0: 1, 1: 1}), _zeile("Ventil", {0: 1, 2: 1}),
+              _zeile("Klappe", {1: 2, 2: 1}), _zeile("", {0: 3, 1: 3, 2: 2})]
+    markiere_unbeschriftete_summenzeilen(zeilen)
+    assert zeilen[-1].kind is RowKind.SUMME
+
+
+def test_doppelt_importierte_liste_wird_gemeldet(tmp_path, samples):
+    """Derselbe Plansatz als zweite Datei (anderer Hash) - die Mengen zaehlten
+    sonst unbemerkt doppelt."""
+    import copy
+
+    erste = process_file(samples["alt"])
+    kopie = copy.deepcopy(erste)
+    kopie.file_hash = "kopie" + erste.file_hash[5:]
+    kopie.file_name = "Plansatz_als_Excel.xlsx"
+    engine = db.make_engine(tmp_path / "t.sqlite3")
+    with Session(engine) as session:
+        db.save_document(session, erste)
+        db.save_document(session, kopie)
+        db.save_document(session, process_file(samples["neu"]))
+        roh = aggregate.raw_dataframe(session)
+    dubletten = aggregate.moegliche_dubletten(roh)
+    assert len(dubletten) == 1
+    assert set(dubletten.iloc[0][["datei_a", "datei_b"]]) == {
+        erste.file_name, "Plansatz_als_Excel.xlsx"}
+    assert dubletten.iloc[0]["anteil"] == 1.0

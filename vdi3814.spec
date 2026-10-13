@@ -54,6 +54,8 @@ datas += [
 hiddenimports = collect_submodules("streamlit") + [
     "vdi3814.ui.app",
     "vdi3814.ui.table",  # von app.py importiert, das nur als Skript mitgeliefert wird
+    "vdi3814.ui.auswertung",  # ebenso: Bausteine der Auswerteseite (Reiter 4)
+    "altair",            # Diagramme der Auswerteseite
     "xlrd",              # nur fuer .xls, wird erst zur Laufzeit importiert
     "pytesseract",       # optionales OCR, ebenfalls verzoegert importiert
     "pymupdf",
