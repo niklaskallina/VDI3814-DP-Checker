@@ -271,3 +271,130 @@ def test_kreuz_im_scan_wird_als_eins_gelesen():
         ergebnisse[zeichen] = _lies_ziffer(np.asarray(bild)[3:-2, 3:-2])
     assert ergebnisse == {"x": "x", "X": "x", "2": "2", "4": "4"}
     assert parse_count(ergebnisse["x"]) == 1.0
+
+
+def test_excel_mittig_gesetzte_abschnittsnummern_treffen_ihren_block(tmp_path):
+    """Abschnittsnummer mittig ueber dem Block, nicht verbunden, dazu ein
+    Bemerkungsabschnitt ohne Spaltennummer - die Anzahl passt dann nicht zu
+    den Bloecken. Frueher bekam die erste Spalte keinen Abschnitt und die
+    Werte landeten in einer falschen bzw. unbekannten Spalte."""
+    pfad = tmp_path / "mittig.xlsx"
+    buch = openpyxl.Workbook()
+    blatt = buch.active
+    blatt["D2"] = "1. Ein-/Ausgabefunktionen"
+    for spalte, text in zip("DEFGHI", ("Analoge Eingabe (AI)", "Binäre Eingabe (BI)",
+                                       "Analoge Ausgabe (AO)", "Binäre Ausgabe (BO)",
+                                       "Analogwert (AV)", "Binärwert(e) (BV/MV)")):
+        blatt[f"{spalte}4"] = text
+    blatt["C5"], blatt["E5"], blatt["H5"], blatt["K5"] = "Abschnitt", "1.1.", "1.2.", "9."
+    blatt["C6"] = "Spalte"
+    for spalte, nummer in zip("DEFGHI", ("1", "2", "3", "4", "1", "2")):
+        blatt[f"{spalte}6"] = nummer
+    blatt["K4"] = "Bemerkungen"
+    blatt["A7"], blatt["B7"], blatt["D7"], blatt["H7"] = "1", "Raumtemperatur", 1, 2
+    buch.save(pfad)
+
+    ergebnis = process_file(pfad)
+    # Der Kopf traegt kaum Text - die Fassung folgt dann aus den Adressen
+    assert ergebnis.fassung == "neu"
+    werte = {c.column_key: cell.count for c in ergebnis.columns
+             for cell in ergebnis.counted_rows()[0].cells if cell.column_index == c.index}
+    assert werte == {"N_1_1_1": 1.0, "N_1_2_1": 2.0}
+
+
+@pytest.mark.parametrize("name", ["alt", "neu"])
+def test_spaltenueberschriften_stimmen_mit_der_vorlage_ueberein(samples, name):
+    """Die senkrechten Ueberschriften muessen bei ihrer Spalte bleiben.
+
+    Bei zweistelligen Spaltennummern (6.10 ... 6.13, 2.2.10 ... 2.2.12)
+    rutschte die Ueberschrift frueher in die Nachbarspalte - in Kosten-
+    schaetzung und Export stand dann unter der richtigen Spalte der falsche
+    Name.
+    """
+    from vdi3814.profiles_loader import get_profile
+    from vdi3814.textutil import similarity
+
+    ergebnis = process_file(samples[name])
+    vorlage = get_profile(ergebnis.profile_id)
+    verrutscht = []
+    for spalte in ergebnis.columns:
+        eintrag = vorlage.column(spalte.column_key) if spalte.column_key else None
+        if eintrag is None:
+            continue
+        passung = max(similarity(spalte.label, k) for k in eintrag.candidates() if k)
+        if passung < 0.7:
+            verrutscht.append((spalte.address, spalte.label, eintrag.label))
+    assert not verrutscht, verrutscht
+    assert not any("Spaltenueberschrift" in w for w in ergebnis.warnings)
+
+
+def test_korrekturtabelle_verliert_keine_anmerkungen(samples):
+    """Schon das Anzeigen der Korrekturtabelle hat Freitext und Originalwerte
+    ueberschrieben: aus "x" wurde "1.0", Anmerkungen in Funktionsspalten und
+    Zellen der Bemerkungsspalten verschwanden."""
+    from vdi3814.models import Cell
+    from vdi3814.ui.table import frame_to_result, result_to_frame
+
+    ergebnis = process_file(samples["alt"])
+    zeile = ergebnis.data_rows()[0]
+    spalte = next(c for c in ergebnis.columns if not c.is_note_column
+                  and zeile.value(c.index) is None)
+    zeile.cells.append(Cell(column_index=spalte.index, raw_value="s. Bem.", count=None,
+                            note="s. Bem."))
+    gezaehlt = next(c for c in zeile.cells if c.count is not None)
+    gezaehlt.raw_value = "x" if gezaehlt.count == 1 else gezaehlt.raw_value
+    vorher = ergebnis.grand_total()
+
+    frame_to_result(result_to_frame(ergebnis), ergebnis)      # unveraendert zurueck
+
+    assert ergebnis.grand_total() == vorher
+    notizen = [c.note for c in zeile.cells if c.count is None]
+    assert "s. Bem." in notizen
+    assert any(c.raw_value == gezaehlt.raw_value for c in zeile.cells if c.count is not None)
+
+
+def test_korrekturtabelle_uebernimmt_geaenderte_werte(samples):
+    from vdi3814.ui.table import column_title, frame_to_result, result_to_frame
+
+    ergebnis = process_file(samples["alt"])
+    tabelle = result_to_frame(ergebnis)
+    spalte = next(c for c in ergebnis.columns if not c.is_note_column)
+    vorher = ergebnis.grand_total()
+    alter_wert = tabelle.loc[0, column_title(spalte)]
+    tabelle.loc[0, column_title(spalte)] = 5.0
+    frame_to_result(tabelle, ergebnis)
+    alt = 0.0 if alter_wert is None or alter_wert != alter_wert else float(alter_wert)
+    assert ergebnis.grand_total() == pytest.approx(vorher - alt + 5.0)
+    assert ergebnis.data_rows()[0].value(spalte.index) == 5.0
+
+
+def test_spalte_erscheint_nur_einmal_auch_bei_abweichender_beschriftung(tmp_path, samples):
+    """Zwei Dateien, dieselbe Spalte, unterschiedlich gelesene Ueberschrift.
+
+    Frueher entstanden daraus zwei Zeilen in Spaltensummen und Kosten-
+    schaetzung - im Excel-Export verwiesen beide auf dieselbe Summe, Menge
+    und Kosten zaehlten doppelt.
+    """
+    import copy
+
+    erste = process_file(samples["alt"])
+    zweite = copy.deepcopy(erste)
+    zweite.file_hash = "anders" + erste.file_hash[6:]
+    for spalte in zweite.columns:
+        spalte.label = spalte.label.upper() + " (gelesen)"
+        spalte.group = "Gruppe falsch gelesen"
+
+    engine = db.make_engine(tmp_path / "t.sqlite3")
+    with Session(engine) as session:
+        db.save_document(session, erste)
+        db.save_document(session, zweite)
+        roh = aggregate.raw_dataframe(session)
+    uebersicht = aggregate.column_summary(roh)
+
+    assert not uebersicht["spalte_key"].duplicated().any(), \
+        uebersicht[uebersicht["spalte_key"].duplicated(keep=False)]
+    assert uebersicht["menge"].sum() == pytest.approx(2 * erste.grand_total())
+    from vdi3814.profiles_loader import get_profile
+
+    vorlage = {c.group for c in get_profile("vdi3814_alt").columns}
+    assert set(aggregate.group_summary(roh)["gruppe"]) <= vorlage

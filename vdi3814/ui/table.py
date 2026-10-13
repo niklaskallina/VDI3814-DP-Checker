@@ -12,6 +12,7 @@ import pandas as pd
 
 from vdi3814 import schwerpunkt
 from vdi3814.models import Cell, ColumnHeader, DataPointRow, DocumentResult, RowKind
+from vdi3814.textutil import parse_count
 
 ROW_FIELDS = ["Zeile", "Schwerpunkt", "Datenpunkt", "Benutzeradresse", "Typ", "Bemerkung"]
 DELETE_FIELD = "Löschen"   # Ankreuzspalte zum Entfernen ganzer Zeilen
@@ -78,16 +79,37 @@ def frame_to_result(frame: pd.DataFrame, result: DocumentResult) -> DocumentResu
         row.qualifier = str(record.get("Typ", "") or "")
         row.remark = str(record.get("Bemerkung", "") or "")
         alt = {cell.column_index: cell for cell in row.cells}
-        neu: list[Cell] = []
+        bearbeitbar = set(title_to_index.values())
+        # Was die Tabelle nicht zeigt, bleibt unangetastet: Zellen der
+        # Bemerkungsspalten und Freitext in Funktionsspalten ("s. Bem.").
+        # Frueher wurden sie bei jedem Anzeigen der Tabelle verworfen.
+        neu: list[Cell] = [cell for cell in row.cells
+                           if cell.column_index not in bearbeitbar or cell.count is None]
         for titel, column_index in title_to_index.items():
             wert = record.get(titel)
             if wert is None or (isinstance(wert, float) and pd.isna(wert)) or wert == "":
                 continue
             vorher = alt.get(column_index)
-            neu.append(Cell(column_index=column_index, raw_value=str(wert), count=float(wert),
+            zahl = parse_count(wert)
+            if zahl is None:
+                # Freitext in einer Funktionsspalte zaehlt nicht, bleibt aber stehen
+                neu = [c for c in neu if c.column_index != column_index]
+                neu.append(Cell(column_index=column_index, raw_value=str(wert), count=None,
+                                note=str(wert), bbox=vorher.bbox if vorher else None))
+                continue
+            unveraendert = vorher is not None and vorher.count == zahl
+            neu = [c for c in neu if c.column_index != column_index]
+            neu.append(Cell(column_index=column_index,
+                            # Unveraenderte Werte behalten ihren Originaltext ("x", "2")
+                            raw_value=vorher.raw_value if unveraendert else _als_text(zahl),
+                            count=zahl,
                             bbox=vorher.bbox if vorher else None))
-        row.cells = neu
+        row.cells = sorted(neu, key=lambda cell: cell.column_index)
     return result
+
+
+def _als_text(zahl: float) -> str:
+    return f"{zahl:g}"
 
 
 def marked_rows(frame: pd.DataFrame) -> list[int]:

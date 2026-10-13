@@ -204,6 +204,30 @@ def detect_profile(texts: Iterable[str]) -> tuple[Profile | None, float, dict[st
     return best, scores[best_id], scores
 
 
+def profile_by_addresses(addresses: Iterable[str]) -> tuple[Profile | None, float]:
+    """Bestimmt die Fassung aus den gelesenen Spaltenadressen.
+
+    Rueckfallebene, wenn der Kopf zu wenig Text fuer die Schlagwort-Erkennung
+    traegt: die Adressen ("1.1.1" neu, "6.13" alt) sind je Fassung
+    verschieden. Gewaehlt wird das Profil, das die meisten Adressen kennt -
+    aber nur, wenn es (fast) alle kennt und kein anderes Profil gleichauf ist.
+    Rueckgabe: (Profil oder None, Anteil der bekannten Adressen).
+    """
+    gelesen = {normalize_address(a) for a in addresses if normalize_address(a)}
+    if len(gelesen) < 3:
+        return None, 0.0
+    anteile = []
+    for profile in load_profiles():
+        bekannt = {normalize_address(c.address) for c in profile.all_columns() if c.address}
+        anteile.append((len(gelesen & bekannt) / len(gelesen), profile))
+    anteile.sort(key=lambda item: -item[0])
+    bester_anteil, bestes = anteile[0]
+    zweiter = anteile[1][0] if len(anteile) > 1 else 0.0
+    if bester_anteil >= 0.9 and bester_anteil - zweiter >= 0.2:
+        return bestes, bester_anteil
+    return None, bester_anteil
+
+
 def profile_by_block_sizes(sizes: list[int]) -> Profile | None:
     """Findet das Profil, dessen Abschnittsbloecke genau so aufgebaut sind."""
     if not sizes:

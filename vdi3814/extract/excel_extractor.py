@@ -13,7 +13,8 @@ from pathlib import Path
 
 from ..models import Cell, ColumnHeader, DataPointRow, DocumentMetadata, Footnote, RowKind
 from ..textutil import extract_footnote_markers, normalize, normalize_address, parse_count
-from .base import ExtractionMode, RawTable, assign_sections, drop_after_footer
+from .base import (ExtractionMode, RawTable, assign_sections, drop_after_footer,
+                   sections_by_position)
 from .rowfilter import classify_row, markiere_unbeschriftete_summenzeilen
 
 log = logging.getLogger(__name__)
@@ -311,12 +312,19 @@ def _extract_sheet(grid: list[list[str]], sheet_index: int) -> RawTable | None:
     numbers = [number_row[c] for c in column_indices]
     section_ids = assign_sections(numbers, [s for _, s in sections])
     if not section_ids:
-        # Rueckfallebene: in Excel steht die Abschnittsnummer links im Block
-        # (nicht zentriert) -> letzter Abschnitt links von der Spalte gilt.
+        # Anzahl der Abschnittsnummern passt nicht zu den Bloecken (verbundene
+        # Zellen, Bemerkungsabschnitt ohne Spaltennummer). Dann ueber die Lage:
+        # links- wie mittig gesetzte Abschnittsnummern treffen ihren Block.
+        section_ids = sections_by_position(
+            numbers, [float(c) for c in column_indices],
+            [(float(pos), sec) for pos, sec in sections])
+    if not section_ids or not all(section_ids):
+        # Letzte Rueckfallebene: der naechste Abschnitt links der Spalte.
+        vorhanden = section_ids or [""] * len(column_indices)
         section_ids = []
-        for c in column_indices:
-            applicable = [s for pos, s in sections if pos <= c]
-            section_ids.append(applicable[-1] if applicable else "")
+        for c, bisher in zip(column_indices, vorhanden):
+            applicable = [sec for pos, sec in sections if pos <= c]
+            section_ids.append(bisher or (applicable[-1] if applicable else ""))
 
     first_col, last_col = column_indices[0], column_indices[-1]
     label_row = _label_row_above(grid, section_row, first_col, last_col)

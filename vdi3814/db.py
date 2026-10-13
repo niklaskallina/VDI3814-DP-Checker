@@ -519,7 +519,10 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
             subgroup=column.subgroup,
             label=column.label,
             abbrev=column.abbrev,
-            section="", column_no="",
+            # Gespeicherte Adresse "1.1.3" wieder in Abschnitt + Spalte zerlegen
+            section=(column.address or "").rpartition(".")[0] or (column.address or ""),
+            column_no=(column.address or "").rpartition(".")[2]
+            if "." in (column.address or "") else "",
             footnote_markers=[m for m in column.footnote_markers.split(",") if m],
             column_key=column.column_key or None,
             match_score=column.match_score,
@@ -527,7 +530,6 @@ def load_document(session: Session, document_id: int) -> DocumentResult:
         )
         for column in sorted(document.columns, key=lambda c: c.idx)
     ]
-    # Adresse wird beim Zurueckladen aus dem Profil abgeleitet, nicht gespeichert
     result.rows = [
         DataPointRow(
             row_no=row.row_no,

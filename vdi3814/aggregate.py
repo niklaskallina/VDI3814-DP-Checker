@@ -44,6 +44,7 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
     records: list[dict] = []
     for document in session.scalars(select(db.Document)):
         columns = {c.idx: c for c in document.columns}
+        profile = get_profile(document.profile_id) if document.profile_id else None
         for row in document.rows:
             # Nur echte Datenpunkte: keine Summen-, Uebertrags-, Leer-,
             # Kopf- oder Fussbereichszeilen.
@@ -53,6 +54,10 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
                 column = columns.get(value.column_idx)
                 if column is None or column.is_note:
                     continue
+                # Bezeichnungen einheitlich aus dem Profil: dieselbe Spalte
+                # heisst in jeder Datei gleich, egal wie der Kopf gelesen wurde.
+                vorlage = (profile.column(column.column_key)
+                           if profile is not None and column.column_key else None)
                 records.append({
                     "dokument_id": document.id,
                     "datei": document.file_name,
@@ -73,11 +78,12 @@ def raw_dataframe(session: Session) -> pd.DataFrame:
                     "bas": row.bas,
                     "qualifikation": row.qualifier,
                     "bemerkung": row.remark,
-                    "spalte_adresse": column.address or _column_address(column.column_key),
+                    "spalte_adresse": ((vorlage.address if vorlage else "") or column.address
+                                       or _column_address(column.column_key)),
                     "spalte_key": column.column_key,
-                    "gruppe": column.group_name,
-                    "untergruppe": column.subgroup,
-                    "spalte": column.label,
+                    "gruppe": (vorlage.group if vorlage else "") or column.group_name,
+                    "untergruppe": (vorlage.subgroup if vorlage else "") or column.subgroup,
+                    "spalte": (vorlage.label if vorlage else "") or column.label,
                     "wert": value.count if value.count is not None else 0.0,
                     "rohwert": value.raw_value,
                     "notiz": value.note,
@@ -95,25 +101,60 @@ def _profile_order(profile_id: str) -> dict[str, int]:
 
 
 def column_summary(frame: pd.DataFrame) -> pd.DataFrame:
-    """Summen je Funktionsspalte ueber alle importierten Listen."""
+    """Summen je Funktionsspalte ueber alle importierten Listen.
+
+    Eine Zeile je Spalte des Profils - zusammengefasst ueber den
+    Spaltenschluessel, nicht ueber die gelesene Beschriftung. Liest eine Datei
+    die Ueberschrift etwas anders (OCR, Umbruch, Gruppenzeile), entstand
+    frueher eine zweite Zeile fuer dieselbe Spalte; im Excel-Export verwiesen
+    dann beide auf dieselbe Summe und Menge wie Kosten zaehlten doppelt.
+    Bezeichnungen kommen deshalb aus dem Profil. Spalten ohne Zuordnung
+    bleiben je Adresse und Beschriftung getrennt.
+
+    "datenpunkte" zaehlt die Datenpunkte (Zeilen) mit einem Wert in der Spalte.
+    """
+    spalten = ["profil", "spalte_adresse", "spalte_key", "gruppe", "untergruppe", "spalte",
+               "menge", "dokumente", "datenpunkte"]
     if frame.empty:
-        return pd.DataFrame(columns=["profil", "spalte_adresse", "spalte_key", "gruppe",
-                                     "untergruppe", "spalte", "menge", "dokumente", "datenpunkte"])
+        return pd.DataFrame(columns=spalten)
+    daten = frame.copy()
+    schluessel = daten["spalte_key"].fillna("").astype(str)
+    daten["_gruppe"] = [
+        key if key else f"?{adresse}|{spalte}"
+        for key, adresse, spalte in zip(schluessel, daten["spalte_adresse"].fillna(""),
+                                        daten["spalte"].fillna(""))
+    ]
+    daten["_belegt"] = daten["zeile_id"].where(daten["wert"].fillna(0) != 0)
     grouped = (
-        frame.groupby(["profil", "spalte_adresse", "spalte_key", "gruppe", "untergruppe", "spalte"],
-                      dropna=False)
-        .agg(menge=("wert", "sum"),
+        daten.groupby(["profil", "_gruppe"], dropna=False)
+        .agg(spalte_key=("spalte_key", "first"),
+             spalte_adresse=("spalte_adresse", "first"),
+             gruppe=("gruppe", "first"),
+             untergruppe=("untergruppe", "first"),
+             spalte=("spalte", "first"),
+             menge=("wert", "sum"),
              dokumente=("dokument_id", "nunique"),
-             datenpunkte=("datenpunkt", "count"))
+             datenpunkte=("_belegt", "nunique"))
         .reset_index()
     )
+    # Einheitliche Bezeichnungen aus dem Profil
+    for index, record in grouped.iterrows():
+        profile = get_profile(str(record["profil"])) if record["profil"] else None
+        eintrag = profile.column(str(record["spalte_key"])) if profile and record["spalte_key"] else None
+        if eintrag is None:
+            continue
+        grouped.at[index, "spalte_adresse"] = eintrag.address or record["spalte_adresse"]
+        grouped.at[index, "gruppe"] = eintrag.group or record["gruppe"]
+        grouped.at[index, "untergruppe"] = eintrag.subgroup or record["untergruppe"]
+        grouped.at[index, "spalte"] = eintrag.label or record["spalte"]
+
     orders = {profil: _profile_order(profil) for profil in grouped["profil"].unique()}
     grouped["_sort"] = [
         orders.get(profil, {}).get(key, 9999)
         for profil, key in zip(grouped["profil"], grouped["spalte_key"])
     ]
-    grouped = grouped.sort_values(["profil", "_sort", "spalte_adresse"]).drop(columns="_sort")
-    return grouped.reset_index(drop=True)
+    grouped = grouped.sort_values(["profil", "_sort", "spalte_adresse"])
+    return grouped[spalten].reset_index(drop=True)
 
 
 def group_summary(frame: pd.DataFrame) -> pd.DataFrame:
